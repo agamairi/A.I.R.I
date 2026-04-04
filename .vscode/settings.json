@@ -2,5 +2,6 @@
     "files.associations": {
         "*.ejs": "html",
         "cmath": "cpp"
-    }
+    },
+    "java.configuration.updateBuildConfiguration": "interactive"
 }
