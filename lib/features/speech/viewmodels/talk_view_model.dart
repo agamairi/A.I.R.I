@@ -390,13 +390,20 @@ class TalkViewModel extends ChangeNotifier {
       );
       final stream = _runtimeService.generateStream(lastUserMsg.content);
       final buffer = StringBuffer();
+      var lastNotify = DateTime.now().millisecondsSinceEpoch;
 
       await for (final token in stream) {
         if (epoch != _generationEpoch) break; // cancelled
         buffer.write(token);
         _currentResponse = buffer.toString();
-        notifyListeners();
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - lastNotify >= 80) {
+          notifyListeners();
+          lastNotify = now;
+        }
       }
+      notifyListeners();
 
       // Finalize assistant message.
       if (epoch == _generationEpoch && _currentResponse.trim().isNotEmpty) {

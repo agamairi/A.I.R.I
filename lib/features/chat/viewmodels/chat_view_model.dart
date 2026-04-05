@@ -1,6 +1,7 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:llamadart/llamadart.dart';
 import 'package:local_ai_chat/core/models/conversation.dart';
 import 'package:local_ai_chat/features/chat/repositories/conversation_repository.dart';
 import 'package:local_ai_chat/features/context_assembly/services/context_assembler.dart';
@@ -191,15 +192,40 @@ class ChatViewModel extends ChangeNotifier {
         strictGrounding: strictGrounding,
       );
 
-      final stream = _runtimeService.generateStream(prompt);
+      final genParams = GenerationParams(
+        maxTokens: settings.model.nPredict,
+        temp: settings.model.temperature,
+        topK: settings.model.topK,
+        topP: settings.model.topP,
+        penalty: settings.model.repeatPenalty,
+        seed: settings.model.seed,
+      );
+
+      final stream = _runtimeService.generateStream(
+        prompt,
+        generationParams: genParams,
+      );
       final buffer = StringBuffer();
+
+      // Throttle UI rebuilds: notify at most every 80ms during streaming
+      // to avoid per-token Flutter rebuilds that bottleneck decode throughput.
+      const throttleMs = 80;
+      var lastNotifyTime = DateTime.now().millisecondsSinceEpoch;
 
       await for (final token in stream) {
         if (generationEpoch != _generationEpoch) break;
         buffer.write(token);
         assistantMessage.content = buffer.toString();
-        notifyListeners();
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - lastNotifyTime >= throttleMs) {
+          notifyListeners();
+          lastNotifyTime = now;
+        }
       }
+
+      // Flush final state immediately
+      notifyListeners();
 
       if (assistantMessage.content.trim().isNotEmpty) {
         await _conversationRepository.addMessage(assistantMessage);
@@ -227,6 +253,9 @@ class ChatViewModel extends ChangeNotifier {
       nCtx: settings.model.nCtx,
       nBatch: settings.model.nBatch,
       nPredict: settings.model.nPredict,
+      accelerator: settings.model.accelerator,
+      threads: settings.model.threads,
+      microBatchSize: settings.model.microBatchSize,
     );
     notifyListeners();
   }

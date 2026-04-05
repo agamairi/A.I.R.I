@@ -198,6 +198,9 @@ class VisionViewModel extends ChangeNotifier {
          nCtx: settings.model.nCtx,
          nBatch: settings.model.nBatch,
          nPredict: settings.model.nPredict,
+         accelerator: settings.model.accelerator,
+         threads: settings.model.threads,
+         microBatchSize: settings.model.microBatchSize,
        );
        _applySettings(settings.vision);
        _applyModelSettings(settings.model);
@@ -329,6 +332,7 @@ class VisionViewModel extends ChangeNotifier {
 
       final buffer = StringBuffer();
       final stream = _runtimeService.generateStream(prompt);
+      var lastNotify = DateTime.now().millisecondsSinceEpoch;
 
       await for (final token in stream) {
         if (epoch != _generationEpoch) {
@@ -336,8 +340,14 @@ class VisionViewModel extends ChangeNotifier {
         }
         buffer.write(token);
         _latestResponse = buffer.toString();
-        notifyListeners();
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - lastNotify >= 80) {
+          notifyListeners();
+          lastNotify = now;
+        }
       }
+      notifyListeners();
 
       if (_latestResponse.trim().isNotEmpty) {
         await _speechService.speak(_latestResponse);
@@ -390,6 +400,7 @@ class VisionViewModel extends ChangeNotifier {
         prompt,
         images: [prepared],
       );
+      var lastNotifyV = DateTime.now().millisecondsSinceEpoch;
 
       await for (final token in stream) {
         if (epoch != _generationEpoch) {
@@ -397,8 +408,14 @@ class VisionViewModel extends ChangeNotifier {
         }
         buffer.write(token);
         _latestResponse = buffer.toString();
-        notifyListeners();
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - lastNotifyV >= 80) {
+          notifyListeners();
+          lastNotifyV = now;
+        }
       }
+      notifyListeners();
 
       // After generation is done, let it speak!
       if (_latestResponse.trim().isNotEmpty) {
