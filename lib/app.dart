@@ -10,6 +10,7 @@ import 'package:local_ai_chat/features/chat/viewmodels/chat_view_model.dart';
 import 'package:local_ai_chat/features/chat/viewmodels/conversations_view_model.dart';
 import 'package:local_ai_chat/features/models/viewmodels/model_manager_view_model.dart';
 import 'package:local_ai_chat/features/notebooks/viewmodels/notebooks_view_model.dart';
+import 'package:local_ai_chat/features/performance/viewmodels/benchmark_view_model.dart';
 import 'package:local_ai_chat/features/profile/viewmodels/profile_view_model.dart';
 import 'package:local_ai_chat/features/settings/viewmodels/settings_view_model.dart';
 import 'package:local_ai_chat/features/speech/viewmodels/talk_view_model.dart';
@@ -86,6 +87,14 @@ class AiriApp extends StatelessWidget {
           create: (_) => NotebooksViewModel(services.notebookRepository)
             ..load(),
         ),
+        ChangeNotifierProvider<BenchmarkViewModel>(
+          create: (_) => BenchmarkViewModel(
+            services.modelRuntimeService,
+            services.benchmarkService,
+            services.benchmarkStorageService,
+            services.settingsRepository,
+          ),
+        ),
         ChangeNotifierProvider<VisionViewModel>(
           create: (_) => VisionViewModel(
             services.visionSessionService,
@@ -117,7 +126,8 @@ class AiriApp extends StatelessWidget {
               AppRoutes.notebooks: (_) => const AppShellView(initialIndex: 4),
               AppRoutes.models: (_) => const AppShellView(initialIndex: 5),
               AppRoutes.profile: (_) => const AppShellView(initialIndex: 6),
-              AppRoutes.settings: (_) => const AppShellView(initialIndex: 7),
+              AppRoutes.benchmark: (_) => const AppShellView(initialIndex: 7),
+              AppRoutes.settings: (_) => const AppShellView(initialIndex: 8),
             },
           );
         },

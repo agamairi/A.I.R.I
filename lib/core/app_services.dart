@@ -21,12 +21,16 @@ import 'package:local_ai_chat/features/settings/repositories/settings_repository
 import 'package:local_ai_chat/features/speech/services/speech_service.dart';
 import 'package:local_ai_chat/features/vision/services/frame_scheduler.dart';
 import 'package:local_ai_chat/features/vision/services/vision_session_service.dart';
+import 'package:local_ai_chat/features/performance/services/benchmark_service.dart';
+import 'package:local_ai_chat/features/performance/services/benchmark_storage_service.dart';
 import 'package:local_ai_chat/features/web_access/services/web_access_service.dart';
 
 class AppServices {
   AppServices._();
 
   late final StorageService storageService;
+  late final BenchmarkService benchmarkService;
+  late final BenchmarkStorageService benchmarkStorageService;
 
   late final SettingsRepository settingsRepository;
 
@@ -105,6 +109,9 @@ class AppServices {
       services.chunkStore,
       services.embeddingProvider,
     );
+
+    services.benchmarkService = BenchmarkService();
+    services.benchmarkStorageService = BenchmarkStorageService();
 
     services.webAccessService = WebAccessService(
       policy: WebToolPolicy(

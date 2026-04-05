@@ -9,6 +9,7 @@ abstract final class AppRoutes {
   static const models = '/models';
   static const notebooks = '/notebooks';
   static const notebookChat = '/notebooks/chat';
+  static const benchmark = '/benchmark';
   static const settings = '/settings';
   static const profile = '/profile';
   static const prompts = '/prompts';
