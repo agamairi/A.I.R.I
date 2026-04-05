@@ -141,6 +141,9 @@ class ModelManagerViewModel extends ChangeNotifier {
       } catch (_) {
         // Ignore individual failures
       }
+
+      // Throttle requests to avoid hitting HuggingFace rate limits.
+      await Future.delayed(const Duration(milliseconds: 300));
     }
   }
 
@@ -210,6 +213,12 @@ class ModelManagerViewModel extends ChangeNotifier {
       ),
     );
     return task.id.isEmpty ? null : task.progress;
+  }
+
+  /// Called when the app resumes from background — checks for stalled
+  /// downloads and restarts them.
+  void handleAppResumed() {
+    _downloadService.handleAppResumed();
   }
 
   @override

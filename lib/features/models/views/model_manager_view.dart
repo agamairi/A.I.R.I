@@ -17,12 +17,14 @@ class ModelManagerView extends StatefulWidget {
   State<ModelManagerView> createState() => _ModelManagerViewState();
 }
 
-class _ModelManagerViewState extends State<ModelManagerView> {
+class _ModelManagerViewState extends State<ModelManagerView>
+    with WidgetsBindingObserver {
   final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ModelManagerViewModel>().initialize();
     });
@@ -30,8 +32,16 @@ class _ModelManagerViewState extends State<ModelManagerView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      context.read<ModelManagerViewModel>().handleAppResumed();
+    }
   }
 
   @override
@@ -46,7 +56,11 @@ class _ModelManagerViewState extends State<ModelManagerView> {
 
         final browseModels = vm.availableModels;
 
+        // Default to Saved tab if local models exist, Browse otherwise.
+        final initialTab = vm.localModels.isNotEmpty ? 2 : 0;
+
         return DefaultTabController(
+          initialIndex: initialTab,
           length: 3,
           child: Scaffold(
             drawer: AppShellDrawer(selectedIndex: widget.drawerIndex),
@@ -164,9 +178,25 @@ class _BrowseModelCard extends StatelessWidget {
     final description = model['cardData']?['description']?.toString();
     final downloads = model['downloads'] as int? ?? 0;
     final likes = model['likes'] as int? ?? 0;
+    // Filter tags: remove machine-readable metadata (contains ':'),
+    // known noise tags, and overly long tags.
+    const noiseTags = <String>{
+      'endpoints_compatible',
+      'region:us',
+      'region:eu',
+      'imatrix',
+      'conversational',
+      'has_space',
+      'autotrain_compatible',
+    };
     final tags = (model['tags'] as List<dynamic>? ?? <dynamic>[])
         .map((t) => t.toString())
-        .where((tag) => tag.toLowerCase().contains('gguf') || tag.length < 12)
+        .where((tag) {
+          if (tag.contains(':')) return false;
+          if (noiseTags.contains(tag)) return false;
+          if (tag.length > 20) return false;
+          return true;
+        })
         .take(8)
         .toList();
 
