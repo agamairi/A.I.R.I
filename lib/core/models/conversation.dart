@@ -1,6 +1,9 @@
 /// Domain models for chat conversations and messages.
 library;
 
+/// Distinguishes text chats from voice talk sessions.
+enum ConversationType { chat, talk }
+
 class Conversation {
   final String id;
   String title;
@@ -9,6 +12,7 @@ class Conversation {
   String? modelId;
   String? notebookId;
   String? customSystemPrompt;
+  final ConversationType type;
 
   Conversation({
     required this.id,
@@ -18,6 +22,7 @@ class Conversation {
     this.modelId,
     this.notebookId,
     this.customSystemPrompt,
+    this.type = ConversationType.chat,
   });
 
   Map<String, dynamic> toMap() => {
@@ -28,6 +33,7 @@ class Conversation {
         'modelId': modelId,
         'notebookId': notebookId,
         'customSystemPrompt': customSystemPrompt,
+        'type': type.name,
       };
 
   factory Conversation.fromMap(Map<String, dynamic> map) => Conversation(
@@ -38,6 +44,10 @@ class Conversation {
         modelId: map['modelId'] as String?,
         notebookId: map['notebookId'] as String?,
         customSystemPrompt: map['customSystemPrompt'] as String?,
+        type: ConversationType.values.firstWhere(
+          (e) => e.name == (map['type'] as String?),
+          orElse: () => ConversationType.chat,
+        ),
       );
 }
 

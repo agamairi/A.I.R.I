@@ -6,14 +6,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:local_ai_chat/core/models/notebook.dart';
 import 'package:local_ai_chat/features/notebooks/repositories/notebook_repository.dart';
-import 'package:local_ai_chat/features/notebooks/services/rag_pipeline_service.dart';
 import 'package:uuid/uuid.dart';
 
 class NotebooksViewModel extends ChangeNotifier {
   final NotebookRepository _notebookRepository;
-  final RagPipelineService _ragPipelineService;
 
-  NotebooksViewModel(this._notebookRepository, this._ragPipelineService);
+  NotebooksViewModel(this._notebookRepository);
 
   List<Notebook> _notebooks = <Notebook>[];
   List<Notebook> get notebooks => List.unmodifiable(_notebooks);
@@ -24,11 +22,18 @@ class NotebooksViewModel extends ChangeNotifier {
   List<DocumentSource> _documents = <DocumentSource>[];
   List<DocumentSource> get documents => List.unmodifiable(_documents);
 
+  // Document counts per notebook id
+  Map<String, int> _documentCounts = <String, int>{};
+  int documentCountFor(String notebookId) => _documentCounts[notebookId] ?? 0;
+
   bool _loading = false;
   bool get loading => _loading;
 
-  String _ragContext = '';
-  String get ragContext => _ragContext;
+  bool _importing = false;
+  bool get importing => _importing;
+
+  String _importStatus = '';
+  String get importStatus => _importStatus;
 
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
@@ -43,6 +48,16 @@ class NotebooksViewModel extends ChangeNotifier {
       if (_selectedNotebook == null && _notebooks.isNotEmpty) {
         _selectedNotebook = _notebooks.first;
       }
+      // Refresh selected notebook reference in case list was reloaded
+      if (_selectedNotebook != null) {
+        final match = _notebooks.where((n) => n.id == _selectedNotebook!.id);
+        if (match.isNotEmpty) {
+          _selectedNotebook = match.first;
+        } else {
+          _selectedNotebook = _notebooks.isNotEmpty ? _notebooks.first : null;
+        }
+      }
+      await _loadDocumentCounts();
       await _loadDocuments();
     } catch (e) {
       _errorMessage = 'Failed to load notebooks: $e';
@@ -65,6 +80,10 @@ class NotebooksViewModel extends ChangeNotifier {
 
     await _notebookRepository.createNotebook(notebook);
     await load();
+    // Auto-select the newly created notebook
+    _selectedNotebook = _notebooks.firstWhere((n) => n.id == notebook.id);
+    await _loadDocuments();
+    notifyListeners();
   }
 
   Future<void> selectNotebook(Notebook notebook) async {
@@ -73,38 +92,68 @@ class NotebooksViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> importDocument() async {
+  /// Opens a multi-file picker and imports each selected file sequentially.
+  Future<void> importDocuments() async {
     if (_selectedNotebook == null) return;
 
-    final result = await FilePicker.platform.pickFiles();
-    if (result == null || result.files.single.path == null) return;
-
-    final filePath = result.files.single.path!;
-    final fileName = result.files.single.name;
-
-    await _notebookRepository.importDocument(
-      notebookId: _selectedNotebook!.id,
-      filePath: filePath,
-      fileName: fileName,
-      chunkSize: _selectedNotebook!.chunkSize,
-      chunkOverlap: _selectedNotebook!.chunkOverlap,
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'txt', 'md'],
     );
 
+    if (result == null || result.files.isEmpty) return;
+
+    _importing = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    final files = result.files.where((f) => f.path != null).toList();
+    int completed = 0;
+
+    for (final file in files) {
+      _importStatus = 'Importing ${completed + 1} of ${files.length}: ${file.name}';
+      notifyListeners();
+
+      try {
+        await _notebookRepository.importDocument(
+          notebookId: _selectedNotebook!.id,
+          filePath: file.path!,
+          fileName: file.name,
+          chunkSize: _selectedNotebook!.chunkSize,
+          chunkOverlap: _selectedNotebook!.chunkOverlap,
+        );
+      } catch (e) {
+        _errorMessage = 'Failed to import ${file.name}: $e';
+      }
+
+      completed++;
+    }
+
+    _importing = false;
+    _importStatus = '';
+    await _loadDocumentCounts();
     await _loadDocuments();
     notifyListeners();
   }
 
-  Future<void> retrieveContext(String query) async {
-    if (_selectedNotebook == null || query.trim().isEmpty) return;
+  /// Deletes a notebook after confirmation (caller handles the dialog).
+  Future<void> deleteNotebook(String id) async {
+    await _notebookRepository.deleteNotebook(id);
 
-    _ragContext = await _ragPipelineService.retrieveContext(
-      notebookId: _selectedNotebook!.id,
-      query: query.trim(),
-      topK: _selectedNotebook!.topK,
-      mode: _selectedNotebook!.retrievalMode,
-      includeCitations: _selectedNotebook!.citationsEnabled,
-    );
+    if (_selectedNotebook?.id == id) {
+      _selectedNotebook = null;
+      _documents = <DocumentSource>[];
+    }
 
+    await load();
+  }
+
+  /// Deletes a single document and refreshes the list.
+  Future<void> deleteDocument(String documentId) async {
+    await _notebookRepository.deleteDocument(documentId);
+    await _loadDocumentCounts();
+    await _loadDocuments();
     notifyListeners();
   }
 
@@ -115,6 +164,15 @@ class NotebooksViewModel extends ChangeNotifier {
     }
 
     _documents = await _notebookRepository.listDocuments(_selectedNotebook!.id);
+  }
+
+  Future<void> _loadDocumentCounts() async {
+    final counts = <String, int>{};
+    for (final notebook in _notebooks) {
+      counts[notebook.id] =
+          await _notebookRepository.documentCount(notebook.id);
+    }
+    _documentCounts = counts;
   }
 
   String fileNameFromPath(String path) => File(path).uri.pathSegments.last;
