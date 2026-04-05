@@ -89,9 +89,9 @@ class AiriApp extends StatelessWidget {
         ChangeNotifierProvider<VisionViewModel>(
           create: (_) => VisionViewModel(
             services.visionSessionService,
-            services.frameScheduler,
             services.modelRuntimeService,
             services.settingsRepository,
+            services.speechService,
           ),
         ),
       ],
