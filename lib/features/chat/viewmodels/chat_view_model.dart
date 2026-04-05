@@ -43,6 +43,9 @@ class ChatViewModel extends ChangeNotifier {
   bool _isGenerating = false;
   bool get isGenerating => _isGenerating;
 
+  String? _notebookTitle;
+  String? get notebookTitle => _notebookTitle;
+
   bool _isLoadingConversation = false;
   bool get isLoadingConversation => _isLoadingConversation;
 
@@ -77,6 +80,16 @@ class ChatViewModel extends ChangeNotifier {
 
   Future<void> createConversation({String title = 'New Chat', String? notebookId}) async {
     final now = DateTime.now();
+
+    // Load notebook title for display in the chat view
+    if (notebookId != null) {
+      final notebook = await _notebookRepository.getNotebook(notebookId);
+      _notebookTitle = notebook?.title;
+      title = _notebookTitle ?? 'Notebook Chat';
+    } else {
+      _notebookTitle = null;
+    }
+
     _conversation = Conversation(
       id: const Uuid().v4(),
       title: title,
@@ -147,21 +160,35 @@ class ChatViewModel extends ChangeNotifier {
       }
 
       String? ragContext;
+      bool strictGrounding = false;
+      String? notebookSystemPrompt;
+
       if (_conversation!.notebookId != null) {
-        ragContext = await _ragPipelineService.retrieveContext(
-          notebookId: _conversation!.notebookId!,
-          query: input,
-          topK: 3, // Safe default, or fetch from notebook settings if available.
-        );
+        final notebook =
+            await _notebookRepository.getNotebook(_conversation!.notebookId!);
+        if (notebook != null) {
+          strictGrounding = notebook.strictGrounding;
+          notebookSystemPrompt = notebook.systemPrompt;
+
+          ragContext = await _ragPipelineService.retrieveContext(
+            notebookId: _conversation!.notebookId!,
+            query: input,
+            topK: notebook.topK,
+            mode: notebook.retrievalMode,
+            includeCitations: notebook.citationsEnabled,
+          );
+        }
       }
 
       final prompt = await _contextAssembler.assemble(
         messages: recentMessages,
         conversationId: _conversation!.id,
         notebookId: _conversation!.notebookId,
-        customSystemPrompt: _conversation!.customSystemPrompt,
+        customSystemPrompt:
+            _conversation!.customSystemPrompt ?? notebookSystemPrompt,
         compressedMemory: compressedMemory,
         ragContext: ragContext,
+        strictGrounding: strictGrounding,
       );
 
       final stream = _runtimeService.generateStream(prompt);

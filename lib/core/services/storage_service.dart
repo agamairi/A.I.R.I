@@ -153,6 +153,8 @@ class StorageService {
     await _ensureColumn(db, 'conversations', 'modelId', 'TEXT');
     await _ensureColumn(db, 'conversations', 'notebookId', 'TEXT');
     await _ensureColumn(db, 'conversations', 'customSystemPrompt', 'TEXT');
+    await _ensureColumn(
+        db, 'conversations', 'type', "TEXT DEFAULT 'chat'");
     await _ensureColumn(db, 'messages', 'imageAttachmentPath', 'TEXT');
 
     await _ensureColumn(db, 'notebooks', 'systemPrompt', 'TEXT');
