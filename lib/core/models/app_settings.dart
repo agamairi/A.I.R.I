@@ -48,6 +48,21 @@ class ModelSettings {
   int topK;
   double topP;
 
+  /// Accelerator backend: 'auto', 'cpu', 'vulkan', 'metal', 'cuda'.
+  String accelerator;
+
+  /// CPU thread count override (0 = auto-detect based on cores).
+  int threads;
+
+  /// Micro-batch size override (0 = auto).
+  int microBatchSize;
+
+  /// Repeat penalty for generation.
+  double repeatPenalty;
+
+  /// Random seed for sampling (null = random).
+  int? seed;
+
   ModelSettings({
     this.nCtx = 2048,
     this.nBatch = 512,
@@ -55,6 +70,11 @@ class ModelSettings {
     this.temperature = 0.7,
     this.topK = 40,
     this.topP = 0.9,
+    this.accelerator = 'auto',
+    this.threads = 0,
+    this.microBatchSize = 0,
+    this.repeatPenalty = 1.1,
+    this.seed,
   });
 }
 

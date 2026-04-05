@@ -34,6 +34,11 @@ class SettingsRepository {
         temperature: prefs.getDouble('model.temperature') ?? 0.7,
         topK: prefs.getInt('model.topK') ?? 40,
         topP: prefs.getDouble('model.topP') ?? 0.9,
+        accelerator: prefs.getString('model.accelerator') ?? 'auto',
+        threads: prefs.getInt('model.threads') ?? 0,
+        microBatchSize: prefs.getInt('model.microBatchSize') ?? 0,
+        repeatPenalty: prefs.getDouble('model.repeatPenalty') ?? 1.1,
+        seed: prefs.getInt('model.seed'),
       ),
       vision: VisionSettings(
         performanceMode: prefs.getBool('vision.performanceMode') ?? true,
@@ -90,6 +95,15 @@ class SettingsRepository {
     await prefs.setDouble('model.temperature', s.temperature);
     await prefs.setInt('model.topK', s.topK);
     await prefs.setDouble('model.topP', s.topP);
+    await prefs.setString('model.accelerator', s.accelerator);
+    await prefs.setInt('model.threads', s.threads);
+    await prefs.setInt('model.microBatchSize', s.microBatchSize);
+    await prefs.setDouble('model.repeatPenalty', s.repeatPenalty);
+    if (s.seed != null) {
+      await prefs.setInt('model.seed', s.seed!);
+    } else {
+      await prefs.remove('model.seed');
+    }
   }
 
   Future<void> saveVisionSettings(VisionSettings s) async {

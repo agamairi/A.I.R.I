@@ -14,7 +14,7 @@ import 'package:local_ai_chat/features/web_access/services/web_access_service.da
 class SettingsView extends StatelessWidget {
   final int drawerIndex;
 
-  const SettingsView({super.key, this.drawerIndex = 7});
+  const SettingsView({super.key, this.drawerIndex = 8});
 
   Future<void> _toggleLan(
     BuildContext context,
@@ -175,6 +175,95 @@ class SettingsView extends StatelessWidget {
     );
   }
 
+  Future<void> _editOptionalInt(
+    BuildContext context,
+    String title,
+    int? current,
+    Future<void> Function(int? value) onSave,
+  ) async {
+    final controller =
+        TextEditingController(text: current?.toString() ?? '');
+    final result = await showDialog<int?>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            autofocus: true,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              hintText: 'Leave empty for default',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final text = controller.text.trim();
+                if (text.isEmpty) {
+                  Navigator.of(dialogContext).pop(null);
+                  return;
+                }
+                final parsed = int.tryParse(text);
+                if (parsed != null) {
+                  Navigator.of(dialogContext).pop(parsed);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    // Dialog returns null for cancel AND for empty — disambiguate via
+    // controller text: if it was dismissed via Cancel the result is null
+    // and text is unchanged; if cleared and saved, result is also null.
+    // We call onSave whenever the dialog wasn't cancelled.
+    if (result != null || controller.text.trim().isEmpty) {
+      await onSave(result);
+    }
+  }
+
+  Future<void> _pickAccelerator(
+    BuildContext context,
+    SettingsViewModel vm,
+    AppSettings settings,
+  ) async {
+    const options = ['auto', 'cpu', 'vulkan', 'metal', 'cuda'];
+    final current = settings.model.accelerator;
+
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return SimpleDialog(
+          title: const Text('Accelerator'),
+          children: options.map((option) {
+            return ListTile(
+              title: Text(option),
+              leading: Icon(
+                option == current
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+              ),
+              onTap: () => Navigator.of(dialogContext).pop(option),
+            );
+          }).toList(),
+        );
+      },
+    );
+
+    if (picked != null && picked != current) {
+      settings.model.accelerator = picked;
+      await vm.saveModelSettings(settings.model);
+    }
+  }
+
   void _syncWebPolicy(WebAccessService service, WebAccessSettings settings) {
     service.policy = WebToolPolicy(
       enabled: settings.allowInternetAccess,
@@ -320,6 +409,79 @@ class SettingsView extends StatelessWidget {
                         },
                         min: 0.1,
                         max: 1.0,
+                      ),
+                    ),
+                    _ValueTile(
+                      title: 'repeat_penalty',
+                      value: settings.model.repeatPenalty.toStringAsFixed(2),
+                      onTap: () => _editDouble(
+                        context,
+                        'repeat_penalty',
+                        settings.model.repeatPenalty,
+                        (value) async {
+                          settings.model.repeatPenalty = value;
+                          await vm.saveModelSettings(settings.model);
+                        },
+                        min: 0.0,
+                        max: 2.0,
+                      ),
+                    ),
+                    _ValueTile(
+                      title: 'seed',
+                      value: settings.model.seed?.toString() ?? 'random',
+                      onTap: () => _editOptionalInt(
+                        context,
+                        'Seed (leave empty for random)',
+                        settings.model.seed,
+                        (value) async {
+                          settings.model.seed = value;
+                          await vm.saveModelSettings(settings.model);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                _SettingsSection(
+                  title: 'Runtime / Acceleration',
+                  children: [
+                    ListTile(
+                      title: const Text('Accelerator'),
+                      subtitle: Text(settings.model.accelerator),
+                      trailing: const Icon(Icons.edit_outlined),
+                      onTap: () => _pickAccelerator(context, vm, settings),
+                    ),
+                    _ValueTile(
+                      title: 'Threads',
+                      value: settings.model.threads == 0
+                          ? 'auto'
+                          : settings.model.threads.toString(),
+                      onTap: () => _editOptionalInt(
+                        context,
+                        'Threads (0 = auto)',
+                        settings.model.threads == 0
+                            ? null
+                            : settings.model.threads,
+                        (value) async {
+                          settings.model.threads = value ?? 0;
+                          await vm.saveModelSettings(settings.model);
+                        },
+                      ),
+                    ),
+                    _ValueTile(
+                      title: 'Micro-batch size',
+                      value: settings.model.microBatchSize == 0
+                          ? 'auto'
+                          : settings.model.microBatchSize.toString(),
+                      onTap: () => _editOptionalInt(
+                        context,
+                        'Micro-batch size (0 = auto)',
+                        settings.model.microBatchSize == 0
+                            ? null
+                            : settings.model.microBatchSize,
+                        (value) async {
+                          settings.model.microBatchSize = value ?? 0;
+                          await vm.saveModelSettings(settings.model);
+                        },
                       ),
                     ),
                   ],

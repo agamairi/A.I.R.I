@@ -122,6 +122,9 @@ class _ModelInitSheetState extends State<ModelInitSheet> {
           nCtx: modelSettings.nCtx,
           nBatch: modelSettings.nBatch,
           nPredict: modelSettings.nPredict,
+          accelerator: modelSettings.accelerator,
+          threads: modelSettings.threads,
+          microBatchSize: modelSettings.microBatchSize,
         );
       }
 

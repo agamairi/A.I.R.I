@@ -174,6 +174,9 @@ class ModelManagerViewModel extends ChangeNotifier {
       nCtx: settings.model.nCtx,
       nBatch: settings.model.nBatch,
       nPredict: settings.model.nPredict,
+      accelerator: settings.model.accelerator,
+      threads: settings.model.threads,
+      microBatchSize: settings.model.microBatchSize,
     );
     notifyListeners();
   }
