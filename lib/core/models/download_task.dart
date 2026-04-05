@@ -6,8 +6,8 @@ enum DownloadStatus { queued, active, paused, completed, failed }
 class DownloadTask {
   final String id;
   final String modelName;
-  final String downloadUrl;
-  final String savePath;
+  String downloadUrl;
+  String savePath;
   DownloadStatus status;
   double progress;
   int? totalBytes;

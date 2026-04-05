@@ -1,9 +1,11 @@
 /// Persistent download service with queue management.
 /// Downloads survive screen navigation and restore state on reopen.
+/// Supports resumable downloads via HTTP Range headers.
 library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:local_ai_chat/core/models/download_task.dart';
@@ -12,9 +14,14 @@ import 'package:path_provider/path_provider.dart';
 
 class ModelDownloadService {
   final StorageService _storage;
-  final Dio _dio = Dio();
+  late final Dio _dio;
+
   final Map<String, CancelToken> _cancelTokens = {};
   bool _queuePumpRunning = false;
+
+  /// Tracks when the last progress update was received for active downloads.
+  /// Used by [handleAppResumed] to detect stalled downloads.
+  DateTime? _lastProgressTime;
 
   /// Stream controller that broadcasts download state changes.
   final _stateController = StreamController<List<DownloadTask>>.broadcast();
@@ -23,7 +30,10 @@ class ModelDownloadService {
   List<DownloadTask> _tasks = [];
   List<DownloadTask> get tasks => List.unmodifiable(_tasks);
 
-  ModelDownloadService(this._storage);
+  ModelDownloadService(this._storage) {
+    _dio = Dio();
+    _dio.interceptors.add(_RateLimitInterceptor(_dio));
+  }
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -38,8 +48,8 @@ class ModelDownloadService {
     for (final t in _tasks) {
       if (t.status == DownloadStatus.active) {
         t.status = DownloadStatus.queued;
-        t.progress = 0.0;
-        t.downloadedBytes = 0;
+        // Don't reset progress/downloadedBytes — we'll resume from the
+        // partial file on disk using Range headers.
         await _storage.update(
           'download_tasks',
           t.toMap(),
@@ -51,6 +61,38 @@ class ModelDownloadService {
 
     _broadcastState();
     unawaited(_processQueue());
+  }
+
+  /// Called when the app resumes from background. Detects stalled active
+  /// downloads whose HTTP connection may have been broken by the OS and
+  /// re-queues them so they resume from the partial file.
+  void handleAppResumed() {
+    final now = DateTime.now();
+    bool changed = false;
+
+    for (final t in _tasks) {
+      if (t.status == DownloadStatus.active) {
+        // If no progress was received in the last 10 seconds, assume the
+        // connection died while the app was backgrounded.
+        final stalled = _lastProgressTime == null ||
+            now.difference(_lastProgressTime!).inSeconds > 10;
+
+        if (stalled) {
+          // Cancel the old HTTP request if it's still lingering
+          _cancelTokens[t.id]?.cancel();
+          _cancelTokens.remove(t.id);
+
+          t.status = DownloadStatus.queued;
+          _persist(t);
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      _broadcastState();
+      unawaited(_processQueue());
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -80,12 +122,13 @@ class ModelDownloadService {
     _broadcastState();
   }
 
-  /// Retries a failed download.
+  /// Retries a failed download. Preserves downloaded bytes so it can resume
+  /// from the partial file via HTTP Range headers.
   Future<void> retry(String taskId) async {
     final task = _tasks.firstWhere((t) => t.id == taskId);
     task.status = DownloadStatus.queued;
-    task.progress = 0.0;
-    task.downloadedBytes = 0;
+    // Don't reset downloadedBytes or progress — _startDownload will check the
+    // partial file on disk and resume from there.
     task.errorMessage = null;
     await _persist(task);
     _broadcastState();
@@ -125,18 +168,84 @@ class ModelDownloadService {
 
     try {
       final resolved = await _resolveDownload(task);
+
+      // Persist the resolved URL/path back to the task so retries don't need
+      // to re-resolve from the HuggingFace API.
+      if (task.downloadUrl.isEmpty || task.savePath.isEmpty) {
+        task.downloadUrl = resolved.downloadUrl;
+        task.savePath = resolved.savePath;
+        await _persist(task);
+      }
+
       final saveFile = File(resolved.savePath);
       await saveFile.parent.create(recursive: true);
-      int lastProgressPersistMs = 0;
 
-      await _dio.download(
+      // Check for an existing partial file to enable resume.
+      int existingBytes = 0;
+      if (await saveFile.exists()) {
+        existingBytes = await saveFile.length();
+      }
+
+      // If we already know the total and the file is complete, skip download.
+      if (task.totalBytes != null &&
+          task.totalBytes! > 0 &&
+          existingBytes >= task.totalBytes!) {
+        task.status = DownloadStatus.completed;
+        task.progress = 1.0;
+        task.downloadedBytes = existingBytes;
+        await _persist(task);
+        _broadcastState();
+        return;
+      }
+
+      int lastProgressPersistMs = 0;
+      _lastProgressTime = DateTime.now();
+
+      // Use streaming download with Range header for resume support.
+      final response = await _dio.get<ResponseBody>(
         resolved.downloadUrl,
-        resolved.savePath,
         cancelToken: cancelToken,
-        onReceiveProgress: (received, total) {
-          if (total != -1) {
-            task.progress = received / total;
-            task.totalBytes = total;
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: existingBytes > 0
+              ? {'Range': 'bytes=$existingBytes-'}
+              : null,
+        ),
+      );
+
+      // Determine total size from Content-Range or Content-Length.
+      final contentRange =
+          response.headers.value('content-range'); // e.g. "bytes 1024-9999/10000"
+      int totalBytes;
+      if (contentRange != null) {
+        // Content-Range: bytes <start>-<end>/<total>
+        final total = contentRange.split('/').last;
+        totalBytes = int.tryParse(total) ?? -1;
+      } else {
+        final contentLength =
+            int.tryParse(response.headers.value('content-length') ?? '') ?? -1;
+        totalBytes = contentLength > 0 ? contentLength + existingBytes : -1;
+      }
+
+      if (totalBytes > 0) {
+        task.totalBytes = totalBytes;
+      }
+
+      // Write the stream to file in append mode.
+      final sink = saveFile.openWrite(mode: FileMode.append);
+      int received = existingBytes;
+
+      try {
+        await for (final chunk in response.data!.stream) {
+          if (cancelToken.isCancelled) break;
+
+          sink.add(chunk);
+          received += chunk.length;
+          _lastProgressTime = DateTime.now();
+
+          if (totalBytes > 0) {
+            task.progress = received / totalBytes;
+            task.totalBytes = totalBytes;
             task.downloadedBytes = received;
             _broadcastState();
 
@@ -146,11 +255,17 @@ class ModelDownloadService {
               unawaited(_persist(task));
             }
           }
-        },
-      );
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
 
-      task.status = DownloadStatus.completed;
-      task.progress = 1.0;
+      if (!cancelToken.isCancelled) {
+        task.status = DownloadStatus.completed;
+        task.progress = 1.0;
+        task.downloadedBytes = received;
+      }
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         return; // Already removed from task list
@@ -207,9 +322,15 @@ class ModelDownloadService {
     });
     final ggufFile = ggufFiles.first;
     final fileName = (ggufFile['path'] as String).split('/').last;
+    final totalSize = ggufFile['size'] as int?;
     resolvedUrl =
         'https://huggingface.co/${task.modelName}/resolve/main/${ggufFile['path']}';
     resolvedPath = '${dir.path}/$fileName';
+
+    // Store total size from the tree API so progress is accurate from the start.
+    if (totalSize != null && totalSize > 0) {
+      task.totalBytes = totalSize;
+    }
 
     return (downloadUrl: resolvedUrl, savePath: resolvedPath);
   }
@@ -234,5 +355,50 @@ class ModelDownloadService {
     }
     _cancelTokens.clear();
     await _stateController.close();
+  }
+}
+
+/// Dio interceptor that automatically retries requests on HTTP 429
+/// (Too Many Requests) with exponential backoff.
+class _RateLimitInterceptor extends Interceptor {
+  final Dio _dio;
+  static const _maxRetries = 4;
+
+  _RateLimitInterceptor(this._dio);
+
+  @override
+  void onError(DioException err, ErrorInterceptorHandler handler) async {
+    if (err.response?.statusCode == 429) {
+      final retryCount = (err.requestOptions.extra['_retryCount'] as int?) ?? 0;
+
+      if (retryCount < _maxRetries) {
+        final retryAfterHeader = err.response?.headers.value('retry-after');
+        int delaySeconds;
+        if (retryAfterHeader != null) {
+          delaySeconds =
+              int.tryParse(retryAfterHeader) ?? _backoffSeconds(retryCount);
+        } else {
+          delaySeconds = _backoffSeconds(retryCount);
+        }
+
+        await Future.delayed(Duration(seconds: delaySeconds));
+
+        final opts = err.requestOptions;
+        opts.extra['_retryCount'] = retryCount + 1;
+
+        try {
+          final response = await _dio.fetch(opts);
+          return handler.resolve(response);
+        } on DioException catch (e) {
+          return handler.reject(e);
+        }
+      }
+    }
+
+    return handler.next(err);
+  }
+
+  int _backoffSeconds(int retryCount) {
+    return math.min(2 * math.pow(2, retryCount).toInt(), 30);
   }
 }
