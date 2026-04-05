@@ -2,11 +2,13 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:local_ai_chat/core/models/conversation.dart';
 import 'package:local_ai_chat/features/app_shell/widgets/app_shell_drawer.dart';
 import 'package:local_ai_chat/features/chat/viewmodels/conversations_view_model.dart';
 
 class ConversationsView extends StatefulWidget {
-  final void Function(String conversationId)? onConversationSelected;
+  final void Function(String conversationId, ConversationType type)?
+      onConversationSelected;
   final int drawerIndex;
 
   const ConversationsView({
@@ -35,7 +37,7 @@ class _ConversationsViewState extends State<ConversationsView> {
         return Scaffold(
           drawer: AppShellDrawer(selectedIndex: widget.drawerIndex),
           appBar: AppBar(
-            title: const Text('Chat History'),
+            title: const Text('History'),
             actions: [
               IconButton(
                 icon: const Icon(Icons.refresh),
@@ -52,16 +54,25 @@ class _ConversationsViewState extends State<ConversationsView> {
                       itemCount: vm.conversations.length,
                       itemBuilder: (context, index) {
                         final convo = vm.conversations[index];
+                        final isTalk = convo.type == ConversationType.talk;
                         return ListTile(
-                          leading: const Icon(Icons.chat_bubble_outline),
+                          leading: Icon(
+                            isTalk
+                                ? Icons.mic_none_outlined
+                                : Icons.chat_bubble_outline,
+                          ),
                           title: Text(convo.title),
-                          subtitle: Text(_formatDate(convo.updatedAt)),
+                          subtitle: Text(
+                            '${isTalk ? 'Talk' : 'Chat'} · ${_formatDate(convo.updatedAt)}',
+                          ),
                           trailing: IconButton(
                             icon: const Icon(Icons.delete_outline),
-                            onPressed: () => vm.deleteConversation(convo.id),
+                            onPressed: () =>
+                                vm.deleteConversation(convo.id),
                           ),
                           onTap: () =>
-                              widget.onConversationSelected?.call(convo.id),
+                              widget.onConversationSelected
+                                  ?.call(convo.id, convo.type),
                         );
                       },
                     ),

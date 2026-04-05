@@ -17,20 +17,12 @@ class NotebooksView extends StatefulWidget {
 }
 
 class _NotebooksViewState extends State<NotebooksView> {
-  final _queryController = TextEditingController();
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<NotebooksViewModel>().load();
     });
-  }
-
-  @override
-  void dispose() {
-    _queryController.dispose();
-    super.dispose();
   }
 
   Future<void> _promptCreateNotebook(NotebooksViewModel vm) async {
@@ -68,10 +60,78 @@ class _NotebooksViewState extends State<NotebooksView> {
     }
   }
 
+  Future<void> _confirmDeleteNotebook(
+      NotebooksViewModel vm, Notebook notebook) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Notebook'),
+          content: Text(
+            'Are you sure you want to delete "${notebook.title}"? '
+            'This will permanently remove all imported documents and their data.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      await vm.deleteNotebook(notebook.id);
+    }
+  }
+
+  Future<void> _confirmDeleteDocument(
+      NotebooksViewModel vm, DocumentSource doc) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Remove Document'),
+          content: Text(
+            'Remove "${doc.fileName}" from this notebook? '
+            'The indexed data will be deleted.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      await vm.deleteDocument(doc.id);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<NotebooksViewModel>(
       builder: (context, vm, _) {
+        final theme = Theme.of(context);
+
         return Scaffold(
           drawer: AppShellDrawer(selectedIndex: widget.drawerIndex),
           appBar: AppBar(
@@ -95,15 +155,34 @@ class _NotebooksViewState extends State<NotebooksView> {
                   child: ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
+                      // ---------- Notebook selector ----------
                       if (vm.notebooks.isEmpty)
-                        const Card(
+                        Card(
                           child: Padding(
-                            padding: EdgeInsets.all(12),
-                            child: Text(
-                                'No notebooks yet. Create one to start importing documents.'),
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                Icon(Icons.library_books_outlined,
+                                    size: 48,
+                                    color: theme.colorScheme.onSurfaceVariant),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No notebooks yet',
+                                  style: theme.textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Create a notebook to start importing PDF documents for AI-grounded Q&A.',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         )
-                      else
+                      else ...[
                         DropdownButtonFormField<Notebook>(
                           initialValue: vm.selectedNotebook,
                           decoration: const InputDecoration(
@@ -114,7 +193,9 @@ class _NotebooksViewState extends State<NotebooksView> {
                               .map(
                                 (notebook) => DropdownMenuItem<Notebook>(
                                   value: notebook,
-                                  child: Text(notebook.title),
+                                  child: Text(
+                                    '${notebook.title} (${vm.documentCountFor(notebook.id)} docs)',
+                                  ),
                                 ),
                               )
                               .toList(),
@@ -124,29 +205,53 @@ class _NotebooksViewState extends State<NotebooksView> {
                             }
                           },
                         ),
+                        if (vm.selectedNotebook != null) ...[
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: () => _confirmDeleteNotebook(
+                                  vm, vm.selectedNotebook!),
+                              icon: Icon(Icons.delete_outline,
+                                  size: 18, color: theme.colorScheme.error),
+                              label: Text(
+                                'Delete notebook',
+                                style:
+                                    TextStyle(color: theme.colorScheme.error),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+
                       const SizedBox(height: 12),
+
+                      // ---------- Action buttons ----------
                       Row(
                         children: [
                           Expanded(
                             child: FilledButton.tonalIcon(
-                              onPressed: vm.selectedNotebook == null
+                              onPressed: vm.selectedNotebook == null ||
+                                      vm.importing
                                   ? null
-                                  : vm.importDocument,
+                                  : vm.importDocuments,
                               icon: const Icon(Icons.upload_file),
-                              label: const Text('Import document'),
+                              label: const Text('Import documents'),
                             ),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: FilledButton.icon(
-                              onPressed: vm.selectedNotebook == null
+                              onPressed: vm.selectedNotebook == null ||
+                                      vm.documents.isEmpty
                                   ? null
                                   : () {
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
                                           builder: (_) => ChatView(
-                                            notebookId: vm.selectedNotebook!.id,
+                                            notebookId:
+                                                vm.selectedNotebook!.id,
                                             drawerIndex: -1,
                                           ),
                                         ),
@@ -158,70 +263,115 @@ class _NotebooksViewState extends State<NotebooksView> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+
+                      // ---------- Import progress ----------
+                      if (vm.importing) ...[
+                        const SizedBox(height: 12),
+                        Card(
+                          color: theme.colorScheme.primaryContainer,
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              children: [
+                                const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    vm.importStatus,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme
+                                          .colorScheme.onPrimaryContainer,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 16),
+
+                      // ---------- Documents list ----------
                       Text(
                         'Documents',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: theme.textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
-                      if (vm.documents.isEmpty)
-                        const Text('No imported documents in this notebook.')
+                      if (vm.selectedNotebook == null)
+                        Text(
+                          'Select or create a notebook to see documents.',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        )
+                      else if (vm.documents.isEmpty)
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                Icon(Icons.description_outlined,
+                                    size: 36,
+                                    color: theme.colorScheme.onSurfaceVariant),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'No documents imported yet.',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Tap "Import documents" to add PDF, TXT, or Markdown files.',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
                       else
                         ...vm.documents.map(
                           (doc) => Card(
                             child: ListTile(
+                              leading: Icon(
+                                _iconForDocType(doc.type),
+                                color: _colorForStatus(doc.status, theme),
+                              ),
                               title: Text(doc.fileName),
                               subtitle: Text(
-                                '${doc.status.name}${doc.errorMessage == null ? '' : ' • ${doc.errorMessage}'}',
+                                _statusLabel(doc),
+                                style: TextStyle(
+                                  color: _colorForStatus(doc.status, theme),
+                                ),
+                              ),
+                              trailing: IconButton(
+                                icon: Icon(Icons.delete_outline,
+                                    color: theme.colorScheme.error),
+                                tooltip: 'Remove document',
+                                onPressed: () =>
+                                    _confirmDeleteDocument(vm, doc),
                               ),
                             ),
                           ),
                         ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Ask notebook',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _queryController,
-                              decoration: const InputDecoration(
-                                border: OutlineInputBorder(),
-                                hintText: 'Ask a question about your documents',
-                              ),
-                              minLines: 1,
-                              maxLines: 3,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton(
-                            onPressed: vm.selectedNotebook == null
-                                ? null
-                                : () =>
-                                    vm.retrieveContext(_queryController.text),
-                            child: const Text('Retrieve'),
-                          ),
-                        ],
-                      ),
-                      if (vm.ragContext.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: SelectableText(vm.ragContext),
-                          ),
-                        ),
-                      ],
+
+                      // ---------- Error ----------
                       if (vm.errorMessage != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(
                             vm.errorMessage!,
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.error),
+                            style:
+                                TextStyle(color: theme.colorScheme.error),
                           ),
                         ),
                     ],
@@ -230,5 +380,40 @@ class _NotebooksViewState extends State<NotebooksView> {
         );
       },
     );
+  }
+
+  IconData _iconForDocType(DocumentType type) {
+    switch (type) {
+      case DocumentType.pdf:
+        return Icons.picture_as_pdf;
+      case DocumentType.txt:
+        return Icons.text_snippet;
+      case DocumentType.markdown:
+        return Icons.code;
+      case DocumentType.other:
+        return Icons.insert_drive_file;
+    }
+  }
+
+  Color _colorForStatus(DocumentStatus status, ThemeData theme) {
+    switch (status) {
+      case DocumentStatus.indexed:
+        return Colors.green;
+      case DocumentStatus.pending:
+        return theme.colorScheme.onSurfaceVariant;
+      case DocumentStatus.failed:
+        return theme.colorScheme.error;
+    }
+  }
+
+  String _statusLabel(DocumentSource doc) {
+    switch (doc.status) {
+      case DocumentStatus.indexed:
+        return 'Indexed ✓';
+      case DocumentStatus.pending:
+        return 'Pending…';
+      case DocumentStatus.failed:
+        return 'Failed${doc.errorMessage != null ? ' • ${doc.errorMessage}' : ''}';
+    }
   }
 }

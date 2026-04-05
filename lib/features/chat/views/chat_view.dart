@@ -84,15 +84,20 @@ class _ChatViewState extends State<ChatView> {
           drawer: widget.drawerIndex >= 0 ? AppShellDrawer(selectedIndex: widget.drawerIndex) : null,
           appBar: AppBar(
             leading: widget.drawerIndex < 0 ? const BackButton() : null,
-            title: Text(vm.conversation?.title ?? 'Chat'),
-            actions: [
-              if (vm.conversation?.notebookId != null)
-                const Padding(
-                  padding: EdgeInsets.only(right: 8),
-                  child: Center(
-                    child: Icon(Icons.local_library, size: 20, color: Colors.green),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(vm.conversation?.title ?? 'Chat'),
+                if (vm.notebookTitle != null)
+                  Text(
+                    'Grounded in: ${vm.notebookTitle}',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.green,
+                        ),
                   ),
-                ),
+              ],
+            ),
+            actions: [
               IconButton(
                 icon: const Icon(Icons.tune),
                 tooltip: 'Model settings',

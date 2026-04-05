@@ -40,6 +40,7 @@ Be accurate, stay neutral, be concise but informative, and use a positive, frien
   /// [customSystemPrompt] — inline override attached to conversation/notebook.
   /// [ragContext] — retrieved document context from RAG pipeline.
   /// [compressedMemory] — compressed summary of earlier conversation.
+  /// [strictGrounding] — if true, instructs the LLM to answer only from documents.
   Future<String> assemble({
     required List<ChatMessage> messages,
     String? conversationId,
@@ -47,6 +48,7 @@ Be accurate, stay neutral, be concise but informative, and use a positive, frien
     String? customSystemPrompt,
     String? ragContext,
     String? compressedMemory,
+    bool strictGrounding = false,
   }) async {
     final buffer = StringBuffer();
 
@@ -86,6 +88,15 @@ Be accurate, stay neutral, be concise but informative, and use a positive, frien
     // Layer 4: RAG retrieved context
     if (ragContext != null && ragContext.isNotEmpty) {
       buffer.writeln();
+      if (strictGrounding) {
+        buffer.writeln(
+          'IMPORTANT: You must answer ONLY using the provided document context below. '
+          'If the answer cannot be found in the documents, clearly state that the '
+          'information is not available in the uploaded documents. Do not use '
+          'outside knowledge.',
+        );
+        buffer.writeln();
+      }
       buffer.writeln('Relevant document context:');
       buffer.writeln(ragContext);
     }

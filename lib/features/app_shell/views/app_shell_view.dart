@@ -1,6 +1,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:local_ai_chat/core/models/conversation.dart';
 import 'package:local_ai_chat/features/chat/views/chat_view.dart';
 import 'package:local_ai_chat/features/chat/views/conversations_view.dart';
 import 'package:local_ai_chat/features/models/views/model_manager_view.dart';
@@ -22,6 +23,7 @@ class AppShellView extends StatefulWidget {
 class _AppShellViewState extends State<AppShellView> {
   late int _selectedIndex;
   String? _selectedConversationId;
+  String? _selectedTalkConversationId;
 
   @override
   void initState() {
@@ -38,14 +40,25 @@ class _AppShellViewState extends State<AppShellView> {
           drawerIndex: 0,
         );
       case 1:
-        return const TalkView(drawerIndex: 1);
+        return TalkView(
+          key: ValueKey('talk:${_selectedTalkConversationId ?? 'new'}'),
+          drawerIndex: 1,
+          conversationId: _selectedTalkConversationId,
+        );
       case 2:
         return ConversationsView(
           drawerIndex: 2,
-          onConversationSelected: (id) {
+          onConversationSelected: (id, type) {
             setState(() {
-              _selectedConversationId = id;
-              _selectedIndex = 0;
+              if (type == ConversationType.talk) {
+                _selectedTalkConversationId = id;
+                _selectedConversationId = null;
+                _selectedIndex = 1;
+              } else {
+                _selectedConversationId = id;
+                _selectedTalkConversationId = null;
+                _selectedIndex = 0;
+              }
             });
           },
         );
@@ -69,3 +82,4 @@ class _AppShellViewState extends State<AppShellView> {
     return _buildBody();
   }
 }
+

@@ -72,6 +72,7 @@ class AiriApp extends StatelessWidget {
             services.speechService,
             services.modelRuntimeService,
             services.settingsRepository,
+            services.conversationRepository,
           )..initialize(),
         ),
         ChangeNotifierProvider<SettingsViewModel>(
@@ -82,16 +83,15 @@ class AiriApp extends StatelessWidget {
               ProfileViewModel(services.userProfileRepository)..load(),
         ),
         ChangeNotifierProvider<NotebooksViewModel>(
-          create: (_) => NotebooksViewModel(
-              services.notebookRepository, services.ragPipelineService)
+          create: (_) => NotebooksViewModel(services.notebookRepository)
             ..load(),
         ),
         ChangeNotifierProvider<VisionViewModel>(
           create: (_) => VisionViewModel(
             services.visionSessionService,
-            services.frameScheduler,
             services.modelRuntimeService,
             services.settingsRepository,
+            services.speechService,
           ),
         ),
       ],
