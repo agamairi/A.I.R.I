@@ -18,6 +18,15 @@ class ContextAssembler {
   final SystemPromptRepository _promptRepo;
   final UserProfileRepository _profileRepo;
 
+  /// Tracks the last system prefix to detect when it changes,
+  /// which invalidates KV-cache prefix reuse.
+  String? _lastSystemPrefix;
+
+  /// Whether the system prefix changed on the last assemble call.
+  /// Callers can use this to decide if a full re-prefill is expected.
+  bool get systemPrefixChanged => _systemPrefixChanged;
+  bool _systemPrefixChanged = false;
+
   ContextAssembler(this._promptRepo, this._profileRepo);
 
   static const String _defaultSystemPrompt = '''
@@ -109,6 +118,11 @@ Be accurate, stay neutral, be concise but informative, and use a positive, frien
     }
 
     buffer.writeln('<|im_end|>');
+
+    // Track system prefix for KV-cache reuse detection
+    final currentPrefix = buffer.toString();
+    _systemPrefixChanged = currentPrefix != _lastSystemPrefix;
+    _lastSystemPrefix = currentPrefix;
 
     // Layer 6 + 7: Recent raw messages (including current user input)
     for (final msg in messages) {
