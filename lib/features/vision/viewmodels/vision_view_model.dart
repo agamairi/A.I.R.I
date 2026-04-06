@@ -168,6 +168,7 @@ class VisionViewModel extends ChangeNotifier {
     await _speechService.stopSpeaking();
     await _visionService.releaseCamera();
     _cameraReady = false;
+    _processingFrame = false;
     notifyListeners();
   }
 

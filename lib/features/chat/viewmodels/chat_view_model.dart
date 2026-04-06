@@ -278,4 +278,12 @@ class ChatViewModel extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
   }
+
+  void cancelGeneration() {
+    if (_isGenerating) {
+      _generationEpoch++;
+      _isGenerating = false;
+      notifyListeners();
+    }
+  }
 }

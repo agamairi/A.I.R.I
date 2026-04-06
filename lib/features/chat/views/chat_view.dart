@@ -26,16 +26,18 @@ class ChatView extends StatefulWidget {
 }
 
 class _ChatViewState extends State<ChatView> {
+  late final ChatViewModel _vm;
+
   @override
   void initState() {
     super.initState();
+    _vm = context.read<ChatViewModel>();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final vm = context.read<ChatViewModel>();
       final id = widget.conversationId;
       if (id != null) {
-        vm.loadConversation(id);
+        _vm.loadConversation(id);
       } else if (widget.notebookId != null) {
-        vm.createConversation(
+        _vm.createConversation(
           title: 'Notebook Chat',
           notebookId: widget.notebookId,
         );
@@ -48,8 +50,14 @@ class _ChatViewState extends State<ChatView> {
     super.didUpdateWidget(oldWidget);
     if (widget.conversationId != oldWidget.conversationId &&
         widget.conversationId != null) {
-      context.read<ChatViewModel>().loadConversation(widget.conversationId!);
+      _vm.loadConversation(widget.conversationId!);
     }
+  }
+
+  @override
+  void dispose() {
+    _vm.cancelGeneration();
+    super.dispose();
   }
 
   Future<void> _openModelSheet() async {
