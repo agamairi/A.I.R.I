@@ -266,6 +266,33 @@ class SettingsView extends StatelessWidget {
 
 
 
+  static int _closestSettingsFps(int ms) {
+    if (ms <= 33) return 30;
+    if (ms <= 83) return 12;
+    if (ms <= 250) return 4;
+    if (ms <= 1000) return 1;
+    return 1;
+  }
+
+  static int _closestSettingsRes(int val) {
+    if (val >= 1080) return 1080;
+    if (val >= 720) return 720;
+    if (val >= 480) return 480;
+    if (val >= 360) return 360;
+    return 240;
+  }
+
+  static String _resolutionLabel(int val) {
+    final res = _closestSettingsRes(val);
+    switch (res) {
+      case 1080: return '1080p FHD';
+      case 720: return '720p HD';
+      case 480: return '480p';
+      case 360: return '360p';
+      default: return '240p';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer2<SettingsViewModel, ThemeViewModel>(
@@ -567,19 +594,45 @@ class SettingsView extends StatelessWidget {
                       subtitle:
                           const Text('Lower frame rate and processing cost'),
                     ),
-                    _ValueTile(
-                      title: 'Frame interval (ms)',
-                      value: settings.vision.frameSamplingIntervalMs.toString(),
-                      onTap: () => _editInt(
-                        context,
-                        'Frame interval (ms)',
-                        settings.vision.frameSamplingIntervalMs,
-                        (value) async {
-                          settings.vision.frameSamplingIntervalMs = value;
+                    ListTile(
+                      title: const Text('Default resolution'),
+                      subtitle: Text(_resolutionLabel(settings.vision.maxImageWidth)),
+                      trailing: DropdownButton<int>(
+                        value: _closestSettingsRes(settings.vision.maxImageWidth),
+                        underline: const SizedBox.shrink(),
+                        items: const [
+                          DropdownMenuItem(value: 240, child: Text('240p')),
+                          DropdownMenuItem(value: 360, child: Text('360p')),
+                          DropdownMenuItem(value: 480, child: Text('480p')),
+                          DropdownMenuItem(value: 720, child: Text('720p HD')),
+                          DropdownMenuItem(value: 1080, child: Text('1080p FHD')),
+                        ],
+                        onChanged: (res) async {
+                          if (res == null) return;
+                          settings.vision.maxImageWidth = res;
+                          settings.vision.maxImageHeight = res;
                           await vm.saveVisionSettings(settings.vision);
                         },
-                        min: 500,
-                        max: 60000,
+                      ),
+                    ),
+                    ListTile(
+                      title: const Text('Default frame rate'),
+                      subtitle: Text('${_closestSettingsFps(settings.vision.frameSamplingIntervalMs)} fps'),
+                      trailing: DropdownButton<int>(
+                        value: _closestSettingsFps(settings.vision.frameSamplingIntervalMs),
+                        underline: const SizedBox.shrink(),
+                        items: const [
+                          DropdownMenuItem(value: 1, child: Text('1 fps')),
+                          DropdownMenuItem(value: 4, child: Text('4 fps')),
+                          DropdownMenuItem(value: 12, child: Text('12 fps')),
+                          DropdownMenuItem(value: 24, child: Text('24 fps')),
+                          DropdownMenuItem(value: 30, child: Text('30 fps')),
+                        ],
+                        onChanged: (fps) async {
+                          if (fps == null) return;
+                          settings.vision.frameSamplingIntervalMs = 1000 ~/ fps;
+                          await vm.saveVisionSettings(settings.vision);
+                        },
                       ),
                     ),
                   ],
