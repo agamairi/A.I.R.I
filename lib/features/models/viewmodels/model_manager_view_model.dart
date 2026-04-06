@@ -37,8 +37,6 @@ class ModelManagerViewModel extends ChangeNotifier {
   List<DownloadTask> _tasks = <DownloadTask>[];
   List<DownloadTask> get tasks => List.unmodifiable(_tasks);
 
-  final Map<String, int> modelSizes = {};
-
   bool _loadingLocal = false;
   bool get loadingLocal => _loadingLocal;
 
@@ -90,7 +88,6 @@ class ModelManagerViewModel extends ChangeNotifier {
 
     try {
       _availableModels = await _catalogService.fetchAvailableModels();
-      _fetchSizesForModels(_availableModels);
     } catch (e) {
       _errorMessage = 'Failed to fetch model catalog: $e';
       _availableModels = <Map<String, dynamic>>[];
@@ -114,7 +111,6 @@ class ModelManagerViewModel extends ChangeNotifier {
         } else {
           _availableModels = await _catalogService.searchModels(_searchQuery);
         }
-        _fetchSizesForModels(_availableModels);
       } catch (e) {
         _errorMessage = 'Failed to search models: $e';
         _availableModels = <Map<String, dynamic>>[];
@@ -127,35 +123,20 @@ class ModelManagerViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _fetchSizesForModels(List<Map<String, dynamic>> models) async {
-    for (final model in models) {
-      final id = model['id']?.toString() ?? '';
-      if (id.isEmpty || modelSizes.containsKey(id)) continue;
-
-      try {
-        final size = await _catalogService.fetchModelSize(id);
-        if (size != null) {
-          modelSizes[id] = size;
-          notifyListeners();
-        }
-      } catch (_) {
-        // Ignore individual failures
-      }
-
-      // Throttle requests to avoid hitting HuggingFace rate limits.
-      await Future.delayed(const Duration(milliseconds: 300));
-    }
+  Future<List<Map<String, dynamic>>> fetchFilesForRepo(String repoId) async {
+    return await _catalogService.fetchRepoFiles(repoId);
   }
 
-  Future<void> enqueueDownload(String modelName) async {
+  Future<void> enqueueDownload(String modelName, {String downloadUrl = '', int? totalBytes}) async {
     final trimmed = modelName.trim();
     if (trimmed.isEmpty) return;
 
     final task = DownloadTask(
       id: const Uuid().v4(),
       modelName: trimmed,
-      downloadUrl: '',
+      downloadUrl: downloadUrl,
       savePath: '',
+      totalBytes: totalBytes,
       createdAt: DateTime.now(),
     );
 
