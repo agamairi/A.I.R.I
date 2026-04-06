@@ -164,6 +164,23 @@ class _VisionViewState extends State<VisionView> with SingleTickerProviderStateM
     return SafeArea(
       child: Column(
         children: [
+          if (vm.visionWarning != null)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                   const Icon(Icons.visibility_off, color: Colors.white, size: 20),
+                   const SizedBox(width: 8),
+                   Expanded(child: Text(vm.visionWarning!, style: const TextStyle(color: Colors.white, fontSize: 13))),
+                ],
+              ),
+            ),
+
           if (vm.errorMessage != null)
             Container(
               margin: const EdgeInsets.all(16),

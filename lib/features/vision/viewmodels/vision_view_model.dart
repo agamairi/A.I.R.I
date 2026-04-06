@@ -58,6 +58,10 @@ class VisionViewModel extends ChangeNotifier {
   Uint8List? _lastFrame;
   Uint8List? get lastFrame => _lastFrame;
 
+  /// Warning shown when model lacks vision support (non-blocking).
+  String? _visionWarning;
+  String? get visionWarning => _visionWarning;
+
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
 
@@ -91,6 +95,7 @@ class VisionViewModel extends ChangeNotifier {
   Future<void> onEnter() async {
     _loadingCamera = true;
     _errorMessage = null;
+    _visionWarning = null;
     notifyListeners();
 
     try {
@@ -115,7 +120,6 @@ class VisionViewModel extends ChangeNotifier {
         // Restart listening after speaking finished
         if (!_isListening && !_isSpeaking && !_processingFrame && _latestResponse.isNotEmpty) {
            if (modelLoaded && _cameraEnabled) {
-               // short delay
                Future.delayed(const Duration(milliseconds: 500), () {
                   if (!_isListening && !_isSpeaking) toggleListening();
                });
@@ -131,8 +135,14 @@ class VisionViewModel extends ChangeNotifier {
         return;
       }
 
+      // Warn early if model doesn't support vision
+      _checkVisionSupport();
+
       await _initCameraWithCurrentResolution();
       _cameraReady = _visionService.isInitialized;
+
+      // Start continuous frame sampling — camera stays live at all times
+      _startContinuousFrameSampling();
 
       // Auto start listening
       toggleListening();
@@ -146,12 +156,46 @@ class VisionViewModel extends ChangeNotifier {
     }
   }
 
+  void _checkVisionSupport() {
+    if (!_runtimeService.capability.supportsVision) {
+      _visionWarning =
+          'Current model does not support vision. '
+          'Load a vision model (e.g. LLaVA) to enable camera analysis. '
+          'Text chat still works.';
+      _cameraEnabled = false;
+    } else {
+      _visionWarning = null;
+    }
+    notifyListeners();
+  }
+
+  /// Continuously captures frames at the configured FPS.
+  /// Stores the latest frame so inference always uses the most recent view.
+  void _startContinuousFrameSampling() {
+    if (!_cameraEnabled || !_cameraReady) return;
+    _visionService.startFrameSampling(
+      interval: Duration(milliseconds: _frameIntervalMs),
+      onFrame: (frame) {
+        _lastFrame = frame;
+      },
+    );
+  }
+
+  void _stopContinuousFrameSampling() {
+    _visionService.stopFrameSampling();
+  }
+
   Future<void> _initCameraWithCurrentResolution() async {
      ResolutionPreset preset = ResolutionPreset.medium;
-     if (_maxHeight >= 1080) preset = ResolutionPreset.veryHigh;
-     else if (_maxHeight >= 720) preset = ResolutionPreset.high;
-     else if (_maxHeight >= 480) preset = ResolutionPreset.medium;
-     else preset = ResolutionPreset.low;
+     if (_maxHeight >= 1080) {
+       preset = ResolutionPreset.veryHigh;
+     } else if (_maxHeight >= 720) {
+       preset = ResolutionPreset.high;
+     } else if (_maxHeight >= 480) {
+       preset = ResolutionPreset.medium;
+     } else {
+       preset = ResolutionPreset.low;
+     }
 
      final currentIndex = _visionService.controller?.description != null ? 
         _visionService.hasCameras ? 0 : 0 // fallback
@@ -164,6 +208,7 @@ class VisionViewModel extends ChangeNotifier {
     _generationEpoch++;
     _speechSubscription?.cancel();
     _speechSubscription = null;
+    _stopContinuousFrameSampling();
     await _speechService.stopListening();
     await _speechService.stopSpeaking();
     await _visionService.releaseCamera();
@@ -191,6 +236,8 @@ class VisionViewModel extends ChangeNotifier {
   Future<void> loadModelWithSettings(String modelPath) async {
     _isModelLoading = true;
     _errorMessage = null;
+    _visionWarning = null;
+    _stopContinuousFrameSampling();
     notifyListeners();
     try {
        final settings = await _settingsRepository.loadAll();
@@ -205,9 +252,14 @@ class VisionViewModel extends ChangeNotifier {
        );
        _applySettings(settings.vision);
        _applyModelSettings(settings.model);
+
+       // Check vision support for newly loaded model
+       _checkVisionSupport();
+
        if (_cameraEnabled) {
           await _initCameraWithCurrentResolution();
           _cameraReady = true;
+          _startContinuousFrameSampling();
           toggleListening();
        }
     } catch (e) {
@@ -250,14 +302,20 @@ class VisionViewModel extends ChangeNotifier {
     if (_cameraEnabled && modelLoaded && !_cameraReady) {
        _initCameraWithCurrentResolution().then((_) {
           _cameraReady = true;
+          _startContinuousFrameSampling();
           notifyListeners();
        });
+    } else if (_cameraEnabled && _cameraReady) {
+       _startContinuousFrameSampling();
+    } else if (!_cameraEnabled) {
+       _stopContinuousFrameSampling();
     }
     notifyListeners();
   }
 
   Future<void> endCall() async {
     _generationEpoch++;
+    _stopContinuousFrameSampling();
     await _speechService.stopListening();
     await _speechService.stopSpeaking();
     await _visionService.releaseCamera();
@@ -301,9 +359,10 @@ class VisionViewModel extends ChangeNotifier {
 
   Future<void> _captureAndAnalyze() async {
     if (_processingFrame) return;
-    
-    if (_cameraEnabled) {
-      final frame = await _visionService.captureStillImage();
+
+    if (_cameraEnabled && modelSupportsVision) {
+      // Use latest frame from continuous sampling — no camera interruption
+      final frame = _lastFrame ?? await _visionService.captureStillImage();
       if (frame == null) {
         _errorMessage = 'Failed to capture frame.';
         notifyListeners();
@@ -378,10 +437,9 @@ class VisionViewModel extends ChangeNotifier {
         return;
       }
       if (!_runtimeService.capability.supportsVision) {
-         _errorMessage = 'Loaded model is text-only. Disabling camera for text chat.';
-         _cameraEnabled = false;
+         _errorMessage = 'Model does not support vision. Switch to a vision model (e.g. LLaVA).';
+         _processingFrame = false;
          notifyListeners();
-         await _inferTextOnly();
          return;
       }
 
@@ -442,10 +500,12 @@ class VisionViewModel extends ChangeNotifier {
      settings.vision.maxImageWidth = _maxWidth;
      settings.vision.maxImageHeight = _maxHeight;
      await _settingsRepository.saveVisionSettings(settings.vision);
-     
+
      // Reinit camera with new resolution preset if running
      if (_cameraReady && _cameraEnabled) {
+        _stopContinuousFrameSampling();
         await _initCameraWithCurrentResolution();
+        _startContinuousFrameSampling();
      }
      notifyListeners();
   }
@@ -455,6 +515,12 @@ class VisionViewModel extends ChangeNotifier {
      final settings = await _settingsRepository.loadAll();
      settings.vision.frameSamplingIntervalMs = _frameIntervalMs;
      await _settingsRepository.saveVisionSettings(settings.vision);
+
+     // Restart frame sampling with new interval
+     if (_cameraReady && _cameraEnabled) {
+        _stopContinuousFrameSampling();
+        _startContinuousFrameSampling();
+     }
      notifyListeners();
   }
 
