@@ -20,6 +20,7 @@ class AppShellDrawer extends StatelessWidget {
     _DrawerDestination(icon: Icons.download_outlined, label: 'Models'),
     _DrawerDestination(icon: Icons.person_outline, label: 'Profile'),
     _DrawerDestination(icon: Icons.speed_outlined, label: 'Benchmark'),
+    _DrawerDestination(icon: Icons.dns_outlined, label: 'Server'),
     _DrawerDestination(icon: Icons.settings_outlined, label: 'Settings'),
   ];
 

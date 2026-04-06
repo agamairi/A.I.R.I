@@ -9,6 +9,7 @@ import 'package:local_ai_chat/features/models/services/model_catalog_service.dar
 import 'package:local_ai_chat/features/models/services/model_download_service.dart';
 import 'package:local_ai_chat/features/models/services/model_runtime_service.dart';
 import 'package:local_ai_chat/features/network_access/services/lan_server_service.dart';
+import 'package:local_ai_chat/features/network_access/services/model_name_resolver.dart';
 import 'package:local_ai_chat/features/notebooks/repositories/notebook_repository.dart';
 import 'package:local_ai_chat/features/notebooks/services/chunk_store.dart';
 import 'package:local_ai_chat/features/notebooks/services/document_parser_service.dart';
@@ -59,6 +60,7 @@ class AppServices {
   late final NotebookRepository notebookRepository;
 
   late final WebAccessService webAccessService;
+  late final ModelNameResolver modelNameResolver;
   late final LanServerService lanServerService;
 
   static Future<AppServices> create() async {
@@ -119,7 +121,11 @@ class AppServices {
         askBeforeSearch: persistedSettings.web.askBeforeSearch,
       ),
     );
-    services.lanServerService = LanServerService(services.modelRuntimeService);
+    services.modelNameResolver = ModelNameResolver();
+    services.lanServerService = LanServerService(
+      services.modelRuntimeService,
+      services.modelNameResolver,
+    );
 
     await services.modelDownloadService.initialize();
     await _restoreLanServerIfEnabled(services, persistedSettings.lan);
@@ -144,7 +150,8 @@ class AppServices {
       await services.lanServerService.start(
         port: settings.port,
         token: token,
-        exposeToLan: true,
+        requireAuth: settings.requireAuth,
+        showWebUI: settings.showWebUI,
       );
     } catch (_) {
       // Keep startup resilient even if port is unavailable.

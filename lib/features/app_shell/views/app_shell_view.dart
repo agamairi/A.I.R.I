@@ -8,6 +8,7 @@ import 'package:local_ai_chat/features/models/views/model_manager_view.dart';
 import 'package:local_ai_chat/features/notebooks/views/notebooks_view.dart';
 import 'package:local_ai_chat/features/profile/views/profile_view.dart';
 import 'package:local_ai_chat/features/performance/views/benchmark_view.dart';
+import 'package:local_ai_chat/features/network_access/views/network_access_view.dart';
 import 'package:local_ai_chat/features/settings/views/settings_view.dart';
 import 'package:local_ai_chat/features/speech/views/talk_view.dart';
 import 'package:local_ai_chat/features/vision/views/vision_view.dart';
@@ -74,7 +75,9 @@ class _AppShellViewState extends State<AppShellView> {
       case 7:
         return const BenchmarkView(drawerIndex: 7);
       case 8:
-        return const SettingsView(drawerIndex: 8);
+        return const NetworkAccessView(drawerIndex: 8);
+      case 9:
+        return const SettingsView(drawerIndex: 9);
       default:
         return const ChatView(drawerIndex: 0);
     }

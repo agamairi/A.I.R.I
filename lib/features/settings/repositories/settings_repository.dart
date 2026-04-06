@@ -18,7 +18,7 @@ class SettingsRepository {
 
   Future<AppSettings> loadAll() async {
     final prefs = await _preferences;
-    final lanPort = (prefs.getInt('lan.port') ?? 8080).clamp(1, 65535);
+    final lanPort = (prefs.getInt('lan.port') ?? 11434).clamp(1, 65535);
     final frameInterval =
         (prefs.getInt('vision.frameSamplingIntervalMs') ?? 5000)
             .clamp(500, 60000);
@@ -64,6 +64,9 @@ class SettingsRepository {
         enabled: prefs.getBool('lan.enabled') ?? false,
         port: lanPort,
         authToken: prefs.getString('lan.authToken') ?? '',
+        requireAuth: prefs.getBool('lan.requireAuth') ?? false,
+        showWebUI: prefs.getBool('lan.showWebUI') ?? true,
+        keepScreenOn: prefs.getBool('lan.keepScreenOn') ?? false,
       ),
       speech: SpeechSettings(
         language: prefs.getString('speech.language') ?? 'en-US',
@@ -138,6 +141,9 @@ class SettingsRepository {
     await prefs.setBool('lan.enabled', s.enabled);
     await prefs.setInt('lan.port', s.port);
     await prefs.setString('lan.authToken', s.authToken);
+    await prefs.setBool('lan.requireAuth', s.requireAuth);
+    await prefs.setBool('lan.showWebUI', s.showWebUI);
+    await prefs.setBool('lan.keepScreenOn', s.keepScreenOn);
   }
 
   Future<void> saveSpeechSettings(SpeechSettings s) async {

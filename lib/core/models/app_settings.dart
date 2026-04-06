@@ -129,10 +129,23 @@ class LanSettings {
   int port;
   String authToken;
 
+  /// When false, API endpoints are open (Ollama default behaviour).
+  /// When true, Bearer token auth is required on all API requests.
+  bool requireAuth;
+
+  /// Serve the built-in chat web UI at the server root (`/`).
+  bool showWebUI;
+
+  /// Keep the screen awake while the server is running.
+  bool keepScreenOn;
+
   LanSettings({
     this.enabled = false,
-    this.port = 8080,
+    this.port = 11434,
     this.authToken = '',
+    this.requireAuth = false,
+    this.showWebUI = true,
+    this.keepScreenOn = false,
   });
 }
 

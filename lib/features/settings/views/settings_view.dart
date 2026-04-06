@@ -9,12 +9,11 @@ import 'package:local_ai_chat/features/app_shell/viewmodels/theme_view_model.dar
 import 'package:local_ai_chat/features/app_shell/widgets/app_shell_drawer.dart';
 import 'package:local_ai_chat/features/network_access/services/lan_server_service.dart';
 import 'package:local_ai_chat/features/settings/viewmodels/settings_view_model.dart';
-import 'package:local_ai_chat/features/web_access/services/web_access_service.dart';
 
 class SettingsView extends StatelessWidget {
   final int drawerIndex;
 
-  const SettingsView({super.key, this.drawerIndex = 8});
+  const SettingsView({super.key, this.drawerIndex = 9});
 
   Future<void> _toggleLan(
     BuildContext context,
@@ -42,7 +41,8 @@ class SettingsView extends StatelessWidget {
       await service.start(
         port: lan.port,
         token: lan.authToken,
-        exposeToLan: true,
+        requireAuth: lan.requireAuth,
+        showWebUI: lan.showWebUI,
       );
     } catch (e) {
       lan.enabled = false;
@@ -264,14 +264,7 @@ class SettingsView extends StatelessWidget {
     }
   }
 
-  void _syncWebPolicy(WebAccessService service, WebAccessSettings settings) {
-    service.policy = WebToolPolicy(
-      enabled: settings.allowInternetAccess,
-      askBeforeSearch: settings.askBeforeSearch,
-      requestTimeout: service.policy.requestTimeout,
-      allowedHosts: service.policy.allowedHosts,
-    );
-  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -287,15 +280,28 @@ class SettingsView extends StatelessWidget {
 
         final settings = vm.settings;
         final lanService = context.watch<LanServerService>();
-        final webService = context.read<WebAccessService>();
 
-        return Scaffold(
-          drawer: AppShellDrawer(selectedIndex: drawerIndex),
-          appBar: AppBar(title: const Text('Settings')),
-          body: SafeArea(
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
+        return DefaultTabController(
+          length: 3,
+          child: Scaffold(
+            drawer: AppShellDrawer(selectedIndex: drawerIndex),
+            appBar: AppBar(
+              title: const Text('Settings'),
+              bottom: const TabBar(
+                tabs: [
+                  Tab(text: 'General', icon: Icon(Icons.tune)),
+                  Tab(text: 'Model & AI', icon: Icon(Icons.memory)),
+                  Tab(text: 'Advanced', icon: Icon(Icons.settings_suggest)),
+                ],
+              ),
+            ),
+            body: SafeArea(
+              child: TabBarView(
+                children: [
+                  // Tab 1: General
+                  ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
                 _SettingsSection(
                   title: 'Appearance',
                   children: [
@@ -318,6 +324,68 @@ class SettingsView extends StatelessWidget {
                     ),
                   ],
                 ),
+                _SettingsSection(
+                  title: 'Speech',
+                  children: [
+                    _ValueTile(
+                      title: 'Language',
+                      value: settings.speech.language,
+                      onTap: () async {
+                        final controller = TextEditingController(
+                            text: settings.speech.language);
+                        final value = await showDialog<String>(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            title: const Text('Speech language'),
+                            content: TextField(
+                              controller: controller,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                hintText: 'e.g. en-US',
+                              ),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(
+                                    context, controller.text.trim()),
+                                child: const Text('Save'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (value != null && value.isNotEmpty) {
+                          settings.speech.language = value;
+                          await vm.saveSpeechSettings(settings.speech);
+                        }
+                      },
+                    ),
+                    _ValueTile(
+                      title: 'Speech rate',
+                      value: settings.speech.speechRate.toStringAsFixed(2),
+                      onTap: () => _editDouble(
+                        context,
+                        'Speech rate',
+                        settings.speech.speechRate,
+                        (value) async {
+                          settings.speech.speechRate = value;
+                          await vm.saveSpeechSettings(settings.speech);
+                        },
+                        min: 0.1,
+                        max: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            // Tab 2: Model & AI
+            ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
                 _SettingsSection(
                   title: 'Model Defaults',
                   children: [
@@ -516,38 +584,21 @@ class SettingsView extends StatelessWidget {
                     ),
                   ],
                 ),
+              ],
+            ),
+            // Tab 3: Advanced
+            ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
                 _SettingsSection(
-                  title: 'Web Access',
-                  children: [
-                    SwitchListTile(
-                      value: settings.web.allowInternetAccess,
-                      onChanged: (value) async {
-                        settings.web.allowInternetAccess = value;
-                        await vm.saveWebSettings(settings.web);
-                        _syncWebPolicy(webService, settings.web);
-                      },
-                      title: const Text('Allow optional web access'),
-                    ),
-                    SwitchListTile(
-                      value: settings.web.askBeforeSearch,
-                      onChanged: (value) async {
-                        settings.web.askBeforeSearch = value;
-                        await vm.saveWebSettings(settings.web);
-                        _syncWebPolicy(webService, settings.web);
-                      },
-                      title: const Text('Ask before web search'),
-                    ),
-                  ],
-                ),
-                _SettingsSection(
-                  title: 'LAN Serving',
+                  title: 'Ollama-Compatible Server',
                   children: [
                     SwitchListTile(
                       value: settings.lan.enabled,
                       onChanged: (value) => _toggleLan(context, vm, value),
-                      title: const Text('Enable LAN server'),
+                      title: const Text('Enable server'),
                       subtitle: const Text(
-                        'Requires auth token for protected endpoints.',
+                        'Expose LLM on your network (Ollama API compatible).',
                       ),
                     ),
                     _ValueTile(
@@ -555,7 +606,7 @@ class SettingsView extends StatelessWidget {
                       value: settings.lan.port.toString(),
                       onTap: () => _editInt(
                         context,
-                        'LAN Port',
+                        'Server Port',
                         settings.lan.port,
                         (value) async {
                           settings.lan.port = value;
@@ -569,41 +620,84 @@ class SettingsView extends StatelessWidget {
                         max: 65535,
                       ),
                     ),
-                    ListTile(
-                      title: const Text('Auth token'),
-                      subtitle: Text(
-                        settings.lan.authToken.isEmpty
-                            ? '(not generated yet)'
-                            : settings.lan.authToken,
+                    SwitchListTile(
+                      value: settings.lan.requireAuth,
+                      onChanged: (value) async {
+                        settings.lan.requireAuth = value;
+                        await vm.saveLanSettings(settings.lan);
+                        if (settings.lan.enabled) {
+                          if (!context.mounted) return;
+                          await _toggleLan(context, vm, true);
+                        }
+                      },
+                      title: const Text('Require authentication'),
+                      subtitle: const Text(
+                        'Off by default for Ollama compatibility. '
+                        'Enable for security on shared networks.',
                       ),
-                      trailing: Wrap(
-                        spacing: 8,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.refresh),
-                            tooltip: 'Regenerate',
-                            onPressed: () async {
-                              settings.lan.authToken = context
-                                  .read<LanServerService>()
-                                  .regenerateToken();
-                              await vm.saveLanSettings(settings.lan);
-                              if (settings.lan.enabled) {
-                                if (!context.mounted) return;
-                                await _toggleLan(context, vm, true);
-                              }
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.copy),
-                            tooltip: 'Copy',
-                            onPressed: settings.lan.authToken.isEmpty
-                                ? null
-                                : () => Clipboard.setData(
-                                      ClipboardData(
-                                          text: settings.lan.authToken),
-                                    ),
-                          ),
-                        ],
+                    ),
+                    if (settings.lan.requireAuth)
+                      ListTile(
+                        title: const Text('Auth token'),
+                        subtitle: Text(
+                          settings.lan.authToken.isEmpty
+                              ? '(not generated yet)'
+                              : settings.lan.authToken,
+                        ),
+                        trailing: Wrap(
+                          spacing: 8,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.refresh),
+                              tooltip: 'Regenerate',
+                              onPressed: () async {
+                                settings.lan.authToken = context
+                                    .read<LanServerService>()
+                                    .regenerateToken();
+                                await vm.saveLanSettings(settings.lan);
+                                if (settings.lan.enabled) {
+                                  if (!context.mounted) return;
+                                  await _toggleLan(context, vm, true);
+                                }
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy),
+                              tooltip: 'Copy',
+                              onPressed: settings.lan.authToken.isEmpty
+                                  ? null
+                                  : () => Clipboard.setData(
+                                        ClipboardData(
+                                            text: settings.lan.authToken),
+                                      ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    SwitchListTile(
+                      value: settings.lan.showWebUI,
+                      onChanged: (value) async {
+                        settings.lan.showWebUI = value;
+                        await vm.saveLanSettings(settings.lan);
+                        if (settings.lan.enabled) {
+                          if (!context.mounted) return;
+                          await _toggleLan(context, vm, true);
+                        }
+                      },
+                      title: const Text('Built-in chat web UI'),
+                      subtitle: const Text(
+                        'Serve a chat interface at the server root URL.',
+                      ),
+                    ),
+                    SwitchListTile(
+                      value: settings.lan.keepScreenOn,
+                      onChanged: (value) async {
+                        settings.lan.keepScreenOn = value;
+                        await vm.saveLanSettings(settings.lan);
+                      },
+                      title: const Text('Keep screen on'),
+                      subtitle: const Text(
+                        'Prevent screen from turning off while server runs.',
                       ),
                     ),
                     ListTile(
@@ -613,62 +707,10 @@ class SettingsView extends StatelessWidget {
                             ? 'Running on ${lanService.address}'
                             : 'Stopped',
                       ),
-                    ),
-                  ],
-                ),
-                _SettingsSection(
-                  title: 'Speech',
-                  children: [
-                    _ValueTile(
-                      title: 'Language',
-                      value: settings.speech.language,
-                      onTap: () async {
-                        final controller = TextEditingController(
-                            text: settings.speech.language);
-                        final value = await showDialog<String>(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            title: const Text('Speech language'),
-                            content: TextField(
-                              controller: controller,
-                              decoration: const InputDecoration(
-                                border: OutlineInputBorder(),
-                                hintText: 'e.g. en-US',
-                              ),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Cancel'),
-                              ),
-                              FilledButton(
-                                onPressed: () => Navigator.pop(
-                                    context, controller.text.trim()),
-                                child: const Text('Save'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (value != null && value.isNotEmpty) {
-                          settings.speech.language = value;
-                          await vm.saveSpeechSettings(settings.speech);
-                        }
-                      },
-                    ),
-                    _ValueTile(
-                      title: 'Speech rate',
-                      value: settings.speech.speechRate.toStringAsFixed(2),
-                      onTap: () => _editDouble(
-                        context,
-                        'Speech rate',
-                        settings.speech.speechRate,
-                        (value) async {
-                          settings.speech.speechRate = value;
-                          await vm.saveSpeechSettings(settings.speech);
-                        },
-                        min: 0.1,
-                        max: 1,
-                      ),
+                      trailing: lanService.isRunning
+                          ? const Icon(Icons.check_circle,
+                              color: Colors.green)
+                          : const Icon(Icons.cancel, color: Colors.red),
                     ),
                   ],
                 ),
@@ -714,8 +756,11 @@ class SettingsView extends StatelessWidget {
                   ),
               ],
             ),
-          ),
-        );
+          ],
+        ),
+      ),
+    ),
+  );
       },
     );
   }
@@ -729,24 +774,24 @@ class _SettingsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-              child: Text(
-                title,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
+          child: Text(
+            title,
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
             ),
-            ...children,
-          ],
+          ),
         ),
-      ),
+        ...children,
+        const SizedBox(height: 8),
+        const Divider(height: 1),
+      ],
     );
   }
 }

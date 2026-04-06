@@ -1,43 +1,71 @@
-/// LAN server service — shelf-based local HTTP API.
+/// LAN server service — Ollama-compatible HTTP API server.
+///
+/// Exposes the on-device LLM via the standard Ollama REST API so that any
+/// tool on the local network (VS Code Cline, Continue, Open WebUI, curl, etc.)
+/// can use the phone as a drop-in replacement for `ollama serve`.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:local_ai_chat/features/models/services/model_runtime_service.dart';
+import 'package:local_ai_chat/features/network_access/services/model_name_resolver.dart';
+import 'package:local_ai_chat/features/network_access/services/ollama_api_handler.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
-import 'package:shelf_router/shelf_router.dart';
-import 'package:local_ai_chat/features/models/services/model_runtime_service.dart';
 import 'package:uuid/uuid.dart';
 
 class LanServerService {
   final ModelRuntimeService _runtime;
+  final ModelNameResolver _nameResolver;
+  late final OllamaApiHandler _ollamaHandler;
 
   HttpServer? _server;
   String _authToken = '';
   bool _isRunning = false;
-  bool _chatInFlight = false;
+  bool _requireAuth = false;
+  bool _showWebUI = true;
+  String? _cachedWebUI;
 
   bool get isRunning => _isRunning;
   String get authToken => _authToken;
+  bool get requireAuth => _requireAuth;
+
   String? get address =>
       _server != null ? '${_server!.address.address}:${_server!.port}' : null;
 
-  LanServerService(this._runtime);
+  int? get port => _server?.port;
 
-  /// Starts the LAN server on the given port.
+  /// Exposes the Ollama handler for monitoring (e.g. client count).
+  OllamaApiHandler get ollamaHandler => _ollamaHandler;
+
+  LanServerService(this._runtime, this._nameResolver) {
+    _ollamaHandler = OllamaApiHandler(_runtime, _nameResolver);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
+  /// Starts the Ollama-compatible LAN server on the given port.
+  ///
+  /// Default port is 11434 (same as Ollama) so tools work with zero config.
   Future<void> start({
-    int port = 8080,
+    int port = 11434,
     String? token,
-    InternetAddress? bindAddress,
-    bool exposeToLan = false,
+    bool requireAuth = false,
+    bool showWebUI = true,
   }) async {
     if (port < 1 || port > 65535) {
       throw ArgumentError.value(
           port, 'port', 'Port must be between 1 and 65535');
     }
     if (_isRunning) return;
+
+    _requireAuth = requireAuth;
+    _showWebUI = showWebUI;
 
     final resolvedToken = token?.trim();
     if (resolvedToken != null && resolvedToken.isNotEmpty) {
@@ -46,20 +74,26 @@ class LanServerService {
       _authToken = const Uuid().v4();
     }
 
-    final router = Router()
-      ..get('/health', _healthHandler)
-      ..get('/model/info', _authMiddleware(_modelInfoHandler))
-      ..post('/chat', _authMiddleware(_chatHandler));
+    // Build the handler using Pipeline — no double-routing.
+    // The OllamaApiHandler router handles all API path matching directly.
+    // We only add CORS and auth as middleware layers on top.
+    final apiHandler = _ollamaHandler.router.call;
 
-    final handler =
-        const Pipeline().addMiddleware(logRequests()).addHandler(router.call);
-
-    final host = bindAddress ??
-        (exposeToLan ? InternetAddress.anyIPv4 : InternetAddress.loopbackIPv4);
+    // Compose: CORS → log → auth → (webUI catch or API handler)
+    final handler = const Pipeline()
+        .addMiddleware(_corsMiddleware())
+        .addMiddleware(logRequests())
+        .addMiddleware(_authMiddleware())
+        .addHandler(_showWebUI ? _withWebUI(apiHandler) : apiHandler);
 
     try {
-      _server = await shelf_io.serve(handler, host, port);
+      _server = await shelf_io.serve(
+        handler,
+        InternetAddress.anyIPv4,
+        port,
+      );
       _isRunning = true;
+      print('Ollama-compatible server running on 0.0.0.0:$port');
     } catch (_) {
       _server = null;
       _isRunning = false;
@@ -74,7 +108,6 @@ class LanServerService {
     } finally {
       _server = null;
       _isRunning = false;
-      _chatInFlight = false;
     }
   }
 
@@ -85,100 +118,113 @@ class LanServerService {
   }
 
   // ---------------------------------------------------------------------------
-  // Middleware
+  // CORS Middleware
   // ---------------------------------------------------------------------------
 
-  Handler _authMiddleware(Handler inner) {
-    return (Request request) {
-      final authHeader = request.headers['authorization'];
-      if (_authToken.isEmpty ||
-          authHeader == null ||
-          authHeader != 'Bearer $_authToken') {
-        return Response.forbidden(
-          jsonEncode({'error': 'Unauthorized'}),
-          headers: {'content-type': 'application/json'},
-        );
-      }
-      return inner(request);
+  static const _corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, HEAD',
+    'Access-Control-Allow-Headers':
+        'Content-Type, Authorization, Accept, X-Requested-With',
+    'Access-Control-Max-Age': '86400',
+  };
+
+  Middleware _corsMiddleware() {
+    return (Handler inner) {
+      return (Request request) async {
+        // Handle preflight
+        if (request.method == 'OPTIONS') {
+          return Response.ok('', headers: _corsHeaders);
+        }
+        final response = await inner(request);
+        return response.change(headers: _corsHeaders);
+      };
     };
   }
 
   // ---------------------------------------------------------------------------
-  // Handlers
+  // Auth Middleware
   // ---------------------------------------------------------------------------
 
-  Response _healthHandler(Request request) {
-    return Response.ok(
-      jsonEncode({
-        'status': 'ok',
-        'modelLoaded': _runtime.isLoaded,
-      }),
-      headers: {'content-type': 'application/json'},
-    );
+  /// Middleware that enforces Bearer token auth when [_requireAuth] is true.
+  ///
+  /// When auth is disabled (default, Ollama-compatible) all requests pass.
+  /// Web UI (`/`) and liveness checks are always exempt from auth so the
+  /// browser can load the page without a token.
+  Middleware _authMiddleware() {
+    return (Handler inner) {
+      return (Request request) {
+        if (!_requireAuth) return inner(request);
+
+        // Exempt web UI root and OPTIONS (preflight already handled above)
+        final path = request.requestedUri.path;
+        if (path == '/' || path.isEmpty) return inner(request);
+
+        final authHeader = request.headers['authorization'];
+        if (_authToken.isEmpty ||
+            authHeader == null ||
+            authHeader != 'Bearer $_authToken') {
+          return Response.forbidden(
+            jsonEncode({'error': 'Unauthorized'}),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return inner(request);
+      };
+    };
   }
 
-  Response _modelInfoHandler(Request request) {
-    return Response.ok(
-      jsonEncode({
-        'modelLoaded': _runtime.isLoaded,
-        'modelPath': _runtime.currentModelPath,
-        'capabilities': _runtime.capability.toMap(),
-      }),
-      headers: {'content-type': 'application/json'},
-    );
+  // ---------------------------------------------------------------------------
+  // Web UI Handler
+  // ---------------------------------------------------------------------------
+
+  /// Wraps the API handler so that `GET /` serves the web UI HTML instead
+  /// of the Ollama liveness text. All other paths fall through to the API.
+  Handler _withWebUI(Handler apiHandler) {
+    return (Request request) async {
+      // Serve web UI for the root path (GET only)
+      if (request.method == 'GET' && request.requestedUri.path == '/') {
+        return _serveWebUI(request);
+      }
+      // Everything else goes to the Ollama API handler
+      return apiHandler(request);
+    };
   }
 
-  Future<Response> _chatHandler(Request request) async {
-    if (!_runtime.isLoaded) {
-      return Response(503,
-          body: jsonEncode({'error': 'No model loaded'}),
-          headers: {'content-type': 'application/json'});
-    }
-    if (_chatInFlight) {
-      return Response(
-        429,
-        body: jsonEncode({'error': 'Model is busy'}),
-        headers: {'content-type': 'application/json'},
-      );
-    }
-
+  Future<Response> _serveWebUI(Request request) async {
     try {
-      _chatInFlight = true;
-      final body = await request.readAsString();
-      if (body.length > 256 * 1024) {
-        return Response(
-          413,
-          body: jsonEncode({'error': 'Request body too large'}),
-          headers: {'content-type': 'application/json'},
-        );
-      }
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final prompt = (data['prompt'] as String?)?.trim();
-
-      if (prompt == null || prompt.isEmpty) {
-        return Response.badRequest(
-          body: jsonEncode({'error': 'Missing prompt field'}),
-          headers: {'content-type': 'application/json'},
-        );
-      }
-
-      final buffer = StringBuffer();
-      final stream = _runtime.generateStream(prompt);
-      await for (final token in stream.timeout(const Duration(minutes: 2))) {
-        buffer.write(token);
-      }
-
+      _cachedWebUI ??=
+          await rootBundle.loadString('assets/web_ui/index.html');
       return Response.ok(
-        jsonEncode({'response': buffer.toString()}),
-        headers: {'content-type': 'application/json'},
+        _cachedWebUI,
+        headers: {'content-type': 'text/html; charset=utf-8'},
       );
     } catch (e) {
-      return Response.internalServerError(
-        body: jsonEncode({'error': e.toString()}),
-        headers: {'content-type': 'application/json'},
+      // Fallback: if asset not found, return liveness text
+      return Response.ok(
+        'Ollama is running (A.I.R.I). Web UI not available: $e',
+        headers: {'content-type': 'text/plain'},
       );
-    } finally {
-      _chatInFlight = false;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Network utilities
+  // ---------------------------------------------------------------------------
+
+  /// Returns the device's LAN IPv4 address, or null if unavailable.
+  static Future<String?> getLocalIpAddress() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLinkLocal: false,
+      );
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (!addr.isLoopback) return addr.address;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 }

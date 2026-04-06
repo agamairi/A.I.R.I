@@ -127,7 +127,9 @@ class AiriApp extends StatelessWidget {
               AppRoutes.models: (_) => const AppShellView(initialIndex: 5),
               AppRoutes.profile: (_) => const AppShellView(initialIndex: 6),
               AppRoutes.benchmark: (_) => const AppShellView(initialIndex: 7),
-              AppRoutes.settings: (_) => const AppShellView(initialIndex: 8),
+              AppRoutes.networkSettings: (_) =>
+                  const AppShellView(initialIndex: 8),
+              AppRoutes.settings: (_) => const AppShellView(initialIndex: 9),
             },
           );
         },
