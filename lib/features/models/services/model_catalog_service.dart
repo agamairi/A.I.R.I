@@ -72,30 +72,31 @@ class ModelCatalogService {
     return models.cast<Map<String, dynamic>>();
   }
 
-  /// Fetches the **total** byte size of all .gguf files for a model on
-  /// HuggingFace. This gives the user a realistic picture of the repo's
-  /// full download footprint.
-  Future<int?> fetchModelSize(String modelName) async {
+  /// Fetches the list of .gguf files for a given repository.
+  /// Used to populate the bottom sheet file selector.
+  Future<List<Map<String, dynamic>>> fetchRepoFiles(String repoId) async {
     try {
-      final url = 'https://huggingface.co/api/models/$modelName/tree/main';
+      final url = 'https://huggingface.co/api/models/$repoId/tree/main';
       final response = await _dio.get(url);
-      if (response.statusCode != 200) return null;
+      if (response.statusCode != 200) return <Map<String, dynamic>>[];
 
       final files = response.data as List<dynamic>;
-      final ggufFiles = files.where(
-        (f) => f['path'].toString().toLowerCase().endsWith('.gguf'),
-      );
+      final ggufFiles = files
+          .where((f) => f['path'].toString().toLowerCase().endsWith('.gguf'))
+          .toList()
+          .cast<Map<String, dynamic>>();
 
-      if (ggufFiles.isEmpty) return null;
+      // Sort by size descending
+      ggufFiles.sort((a, b) {
+        final aSize = a['size'] as int? ?? 0;
+        final bSize = b['size'] as int? ?? 0;
+        return bSize.compareTo(aSize);
+      });
 
-      // Sum all GGUF file sizes to show the total repo download size.
-      int totalSize = 0;
-      for (final f in ggufFiles) {
-        totalSize += (f['size'] as int?) ?? 0;
-      }
-      return totalSize > 0 ? totalSize : null;
-    } catch (_) {}
-    return null;
+      return ggufFiles;
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
   }
 }
 

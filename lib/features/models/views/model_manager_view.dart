@@ -200,9 +200,7 @@ class _BrowseModelCard extends StatelessWidget {
         .take(8)
         .toList();
 
-    final queuedOrActive = viewModel.isQueuedOrActive(rawId);
     final progress = viewModel.progressForRepo(rawId);
-    final sizeBytes = viewModel.modelSizes[rawId];
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -232,12 +230,20 @@ class _BrowseModelCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                FilledButton.icon(
-                  onPressed: queuedOrActive
-                      ? null
-                      : () => viewModel.enqueueDownload(rawId),
-                  icon: const Icon(Icons.download),
-                  label: Text(queuedOrActive ? 'Queued' : 'Download'),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      builder: (bottomSheetContext) => _ModelFilesBottomSheet(
+                        repoId: rawId,
+                        repoName: id,
+                        viewModel: viewModel,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('View Files'),
                 ),
               ],
             ),
@@ -266,13 +272,6 @@ class _BrowseModelCard extends StatelessWidget {
                     size: 16, color: theme.colorScheme.primary),
                 const SizedBox(width: 4),
                 Text('$likes'),
-                if (sizeBytes != null) ...[
-                  const SizedBox(width: 14),
-                  Icon(Icons.sd_storage_outlined,
-                      size: 16, color: theme.colorScheme.primary),
-                  const SizedBox(width: 4),
-                  Text(_humanReadableBytes(sizeBytes)),
-                ],
               ],
             ),
             if (progress != null) ...[
@@ -440,4 +439,154 @@ String _humanReadableBytes(int bytes) {
     idx++;
   }
   return '${size.toStringAsFixed(1)} ${units[idx]}';
+}
+
+class _ModelFilesBottomSheet extends StatefulWidget {
+  final String repoId;
+  final String repoName;
+  final ModelManagerViewModel viewModel;
+
+  const _ModelFilesBottomSheet({
+    required this.repoId,
+    required this.repoName,
+    required this.viewModel,
+  });
+
+  @override
+  State<_ModelFilesBottomSheet> createState() => _ModelFilesBottomSheetState();
+}
+
+class _ModelFilesBottomSheetState extends State<_ModelFilesBottomSheet> {
+  List<Map<String, dynamic>>? _files;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchFiles();
+  }
+
+  Future<void> _fetchFiles() async {
+    try {
+      final files = await widget.viewModel.fetchFilesForRepo(widget.repoId);
+      if (mounted) {
+        setState(() {
+          _files = files;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to load files.';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) {
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${widget.repoName} Files',
+                      style: Theme.of(context).textTheme.titleLarge,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  )
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: _buildBody(scrollController),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(ScrollController scrollController) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null) {
+      return Center(
+        child: Text(
+          _error!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      );
+    }
+
+    if (_files == null || _files!.isEmpty) {
+      return const Center(
+        child: Text('No .gguf files found in this repository.'),
+      );
+    }
+
+    return ListView.separated(
+      controller: scrollController,
+      itemCount: _files!.length,
+      separatorBuilder: (context, index) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final file = _files![index];
+        final filename = (file['path'] as String).split('/').last;
+        final sizeBytes = file['size'] as int? ?? 0;
+        final downloadUrl =
+            'https://huggingface.co/${widget.repoId}/resolve/main/${file['path']}';
+
+        // Actually look to see if this specific file is queued or downloading.
+        // The service checks `modelName == repoId`, but now `modelName` is set 
+        // to `repoId` initially. The true check for *exact* file would be checking URL or savePath.
+        // We'll rely on the global repo-level progress for simplicity, but if the download
+        // has a non-empty downloadUrl matching ours, it's this file.
+        final tasks = widget.viewModel.tasks;
+        final isActive = tasks.any((t) =>
+            t.modelName == widget.repoId &&
+            t.downloadUrl == downloadUrl &&
+            (t.status == DownloadStatus.active ||
+                t.status == DownloadStatus.queued));
+
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          title: Text(filename, style: const TextStyle(fontWeight: FontWeight.w500)),
+          subtitle: Text(_humanReadableBytes(sizeBytes)),
+          trailing: FilledButton.icon(
+            onPressed: isActive
+                ? null
+                : () {
+                    widget.viewModel.enqueueDownload(
+                      widget.repoId,
+                      downloadUrl: downloadUrl,
+                      totalBytes: sizeBytes,
+                    );
+                    Navigator.of(context).pop();
+                  },
+            icon: const Icon(Icons.download, size: 18),
+            label: Text(isActive ? 'Queued' : 'Download'),
+          ),
+        );
+      },
+    );
+  }
 }
