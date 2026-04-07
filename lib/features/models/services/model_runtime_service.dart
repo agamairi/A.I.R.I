@@ -31,6 +31,7 @@ class ModelRuntimeService {
   bool get isLoaded => _isLoaded;
   String? get currentModelPath => _currentModelPath;
   ModelCapability get capability => _capability;
+  bool get visionProjectorLoaded => _visionProjectorLoaded;
 
   /// Exposes the underlying engine for benchmarking and diagnostics.
   LlamaEngine? get engine => _engine;
@@ -257,8 +258,13 @@ class ModelRuntimeService {
       throw StateError('Loaded model does not support vision');
     }
     if (!_visionProjectorLoaded) {
+      final modelDir = _currentModelPath != null
+          ? p.dirname(_currentModelPath!)
+          : 'the model directory';
       throw StateError(
-        'Vision projector is not loaded. Place the matching mmproj GGUF in the same folder as the model file.',
+        'Vision projector not found. Download the matching mmproj GGUF '
+        '(e.g. *-mmproj-*.gguf) for this model and place it in:\n'
+        '$modelDir',
       );
     }
 
