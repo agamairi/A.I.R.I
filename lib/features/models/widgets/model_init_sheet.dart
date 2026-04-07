@@ -33,6 +33,8 @@ class _ModelInitSheetState extends State<ModelInitSheet> {
   final _topKController = TextEditingController();
   final _topPController = TextEditingController();
 
+  bool _enableThinking = false;
+
   List<String> _models = <String>[];
   String? _selectedModel;
 
@@ -62,6 +64,7 @@ class _ModelInitSheetState extends State<ModelInitSheet> {
       _temperatureController.text = settings.model.temperature.toString();
       _topKController.text = settings.model.topK.toString();
       _topPController.text = settings.model.topP.toString();
+      _enableThinking = settings.model.enableThinking;
 
       _models = models;
       final current = widget.runtimeService.currentModelPath;
@@ -110,6 +113,7 @@ class _ModelInitSheetState extends State<ModelInitSheet> {
       temperature: _readDouble(_temperatureController, 0.7, 0.0, 2.0),
       topK: _readInt(_topKController, 40, 1, 200),
       topP: _readDouble(_topPController, 0.9, 0.1, 1.0),
+      enableThinking: _enableThinking,
     );
 
     try {
@@ -261,6 +265,16 @@ class _ModelInitSheetState extends State<ModelInitSheet> {
                       _NumberField(
                         controller: _topKController,
                         label: 'top_k',
+                      ),
+                      const SizedBox(height: 12),
+                      SwitchListTile(
+                        value: _enableThinking,
+                        onChanged: (v) => setState(() => _enableThinking = v),
+                        title: const Text('Enable thinking'),
+                        subtitle: const Text(
+                          'Model reasons step-by-step before answering',
+                        ),
+                        contentPadding: EdgeInsets.zero,
                       ),
                       if (_errorMessage != null)
                         Padding(

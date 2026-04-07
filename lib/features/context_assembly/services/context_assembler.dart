@@ -58,6 +58,7 @@ Be accurate, stay neutral, be concise but informative, and use a positive, frien
     String? ragContext,
     String? compressedMemory,
     bool strictGrounding = false,
+    bool enableThinking = false,
   }) async {
     final buffer = StringBuffer();
 
@@ -115,6 +116,16 @@ Be accurate, stay neutral, be concise but informative, and use a positive, frien
       buffer.writeln();
       buffer.writeln('Previous conversation summary:');
       buffer.writeln(compressedMemory);
+    }
+
+    // Thinking mode instruction
+    if (enableThinking) {
+      buffer.writeln();
+      buffer.writeln(
+        'When answering, first think through your reasoning step by step '
+        'inside <think>...</think> tags, then provide your final answer '
+        'outside the tags.',
+      );
     }
 
     buffer.writeln('<|im_end|>');

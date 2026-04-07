@@ -63,6 +63,9 @@ class ModelSettings {
   /// Random seed for sampling (null = random).
   int? seed;
 
+  /// Whether to enable thinking/reasoning mode during generation.
+  bool enableThinking;
+
   ModelSettings({
     this.nCtx = 2048,
     this.nBatch = 512,
@@ -75,6 +78,7 @@ class ModelSettings {
     this.microBatchSize = 0,
     this.repeatPenalty = 1.1,
     this.seed,
+    this.enableThinking = false,
   });
 }
 
