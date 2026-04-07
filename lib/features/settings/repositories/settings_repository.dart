@@ -39,6 +39,7 @@ class SettingsRepository {
         microBatchSize: prefs.getInt('model.microBatchSize') ?? 0,
         repeatPenalty: prefs.getDouble('model.repeatPenalty') ?? 1.1,
         seed: prefs.getInt('model.seed'),
+        enableThinking: prefs.getBool('model.enableThinking') ?? false,
       ),
       vision: VisionSettings(
         performanceMode: prefs.getBool('vision.performanceMode') ?? true,
@@ -107,6 +108,7 @@ class SettingsRepository {
     } else {
       await prefs.remove('model.seed');
     }
+    await prefs.setBool('model.enableThinking', s.enableThinking);
   }
 
   Future<void> saveVisionSettings(VisionSettings s) async {

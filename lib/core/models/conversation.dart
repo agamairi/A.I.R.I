@@ -61,6 +61,12 @@ class ChatMessage {
   final DateTime timestamp;
   String? imageAttachmentPath;
 
+  /// Paths to attached files (images, PDFs). Stored as comma-separated string in DB.
+  List<String> attachmentPaths;
+
+  /// Whether this message contains thinking/reasoning content.
+  bool isThinking;
+
   ChatMessage({
     required this.id,
     required this.conversationId,
@@ -68,7 +74,9 @@ class ChatMessage {
     required this.content,
     required this.timestamp,
     this.imageAttachmentPath,
-  });
+    List<String>? attachmentPaths,
+    this.isThinking = false,
+  }) : attachmentPaths = attachmentPaths ?? [];
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -77,14 +85,21 @@ class ChatMessage {
         'content': content,
         'timestamp': timestamp.toIso8601String(),
         'imageAttachmentPath': imageAttachmentPath,
+        'attachmentPaths': attachmentPaths.join(','),
+        'isThinking': isThinking ? 1 : 0,
       };
 
-  factory ChatMessage.fromMap(Map<String, dynamic> map) => ChatMessage(
-        id: map['id'] as String,
-        conversationId: map['conversationId'] as String,
-        role: MessageRole.values.byName(map['role'] as String),
-        content: map['content'] as String,
-        timestamp: DateTime.parse(map['timestamp'] as String),
-        imageAttachmentPath: map['imageAttachmentPath'] as String?,
-      );
+  factory ChatMessage.fromMap(Map<String, dynamic> map) {
+    final raw = map['attachmentPaths'] as String?;
+    return ChatMessage(
+      id: map['id'] as String,
+      conversationId: map['conversationId'] as String,
+      role: MessageRole.values.byName(map['role'] as String),
+      content: map['content'] as String,
+      timestamp: DateTime.parse(map['timestamp'] as String),
+      imageAttachmentPath: map['imageAttachmentPath'] as String?,
+      attachmentPaths: (raw != null && raw.isNotEmpty) ? raw.split(',') : [],
+      isThinking: (map['isThinking'] as int?) == 1,
+    );
+  }
 }

@@ -156,6 +156,8 @@ class StorageService {
     await _ensureColumn(
         db, 'conversations', 'type', "TEXT DEFAULT 'chat'");
     await _ensureColumn(db, 'messages', 'imageAttachmentPath', 'TEXT');
+    await _ensureColumn(db, 'messages', 'attachmentPaths', "TEXT DEFAULT ''");
+    await _ensureColumn(db, 'messages', 'isThinking', 'INTEGER DEFAULT 0');
 
     await _ensureColumn(db, 'notebooks', 'systemPrompt', 'TEXT');
     await _ensureColumn(db, 'notebooks', 'chunkSize', 'INTEGER DEFAULT 512');

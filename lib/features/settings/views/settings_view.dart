@@ -534,6 +534,17 @@ class SettingsView extends StatelessWidget {
                         },
                       ),
                     ),
+                    SwitchListTile(
+                      value: settings.model.enableThinking,
+                      onChanged: (value) async {
+                        settings.model.enableThinking = value;
+                        await vm.saveModelSettings(settings.model);
+                      },
+                      title: const Text('Enable thinking'),
+                      subtitle: const Text(
+                        'Model reasons step-by-step before answering.',
+                      ),
+                    ),
                   ],
                 ),
                 _SettingsSection(

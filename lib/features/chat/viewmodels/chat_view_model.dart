@@ -105,6 +105,32 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> sendMessageWithAttachments(String text, List<String> attachments) async {
+    final input = text.trim();
+    if (input.isEmpty || _isGenerating || !_runtimeService.isLoaded) return;
+
+    if (_conversation == null) {
+      await createConversation(
+        title: input.length > 50 ? '${input.substring(0, 50)}...' : input,
+      );
+    }
+
+    _errorMessage = null;
+
+    final userMessage = ChatMessage(
+      id: const Uuid().v4(),
+      conversationId: _conversation!.id,
+      role: MessageRole.user,
+      content: input,
+      timestamp: DateTime.now(),
+      attachmentPaths: attachments,
+    );
+    _messages.add(userMessage);
+    await _conversationRepository.addMessage(userMessage);
+
+    await _generateResponse(input);
+  }
+
   Future<void> sendMessage(String text) async {
     final input = text.trim();
     if (input.isEmpty || _isGenerating || !_runtimeService.isLoaded) return;
@@ -127,6 +153,27 @@ class ChatViewModel extends ChangeNotifier {
     _messages.add(userMessage);
     await _conversationRepository.addMessage(userMessage);
 
+    await _generateResponse(input);
+  }
+
+  Future<void> _generateResponse(String input) async {
+    final settings = await _settingsRepository.loadAll();
+    final thinkingEnabled = settings.model.enableThinking;
+
+    // If thinking is enabled, create a thinking bubble first
+    ChatMessage? thinkingMessage;
+    if (thinkingEnabled) {
+      thinkingMessage = ChatMessage(
+        id: const Uuid().v4(),
+        conversationId: _conversation!.id,
+        role: MessageRole.assistant,
+        content: '',
+        timestamp: DateTime.now(),
+        isThinking: true,
+      );
+      _messages.add(thinkingMessage);
+    }
+
     final assistantMessage = ChatMessage(
       id: const Uuid().v4(),
       conversationId: _conversation!.id,
@@ -141,11 +188,9 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final settings = await _settingsRepository.loadAll();
-
       String? compressedMemory;
       var recentMessages =
-          _messages.where((m) => m.content.isNotEmpty).toList();
+          _messages.where((m) => m.content.isNotEmpty && !m.isThinking).toList();
 
       if (settings.performance.autoCompress &&
           _compressionService.shouldCompress(
@@ -190,6 +235,7 @@ class ChatViewModel extends ChangeNotifier {
         compressedMemory: compressedMemory,
         ragContext: ragContext,
         strictGrounding: strictGrounding,
+        enableThinking: thinkingEnabled,
       );
 
       final genParams = GenerationParams(
@@ -207,15 +253,72 @@ class ChatViewModel extends ChangeNotifier {
       );
       final buffer = StringBuffer();
 
-      // Throttle UI rebuilds: notify at most every 80ms during streaming
-      // to avoid per-token Flutter rebuilds that bottleneck decode throughput.
+      // Track whether we're inside <think>...</think> tags
+      bool inThinkBlock = false;
+      final thinkBuffer = StringBuffer();
+
       const throttleMs = 80;
       var lastNotifyTime = DateTime.now().millisecondsSinceEpoch;
 
       await for (final token in stream) {
         if (generationEpoch != _generationEpoch) break;
         buffer.write(token);
-        assistantMessage.content = buffer.toString();
+
+        if (thinkingEnabled && thinkingMessage != null) {
+          final fullText = buffer.toString();
+
+          // Parse <think>...</think> blocks
+          if (!inThinkBlock && fullText.contains('<think>')) {
+            inThinkBlock = true;
+            final afterTag = fullText.substring(
+              fullText.indexOf('<think>') + '<think>'.length,
+            );
+            thinkBuffer.clear();
+            thinkBuffer.write(afterTag.replaceAll('</think>', ''));
+
+            if (fullText.contains('</think>')) {
+              inThinkBlock = false;
+              final thinkContent = fullText.substring(
+                fullText.indexOf('<think>') + '<think>'.length,
+                fullText.indexOf('</think>'),
+              );
+              thinkingMessage.content = thinkContent.trim();
+
+              final afterThink = fullText.substring(
+                fullText.indexOf('</think>') + '</think>'.length,
+              );
+              assistantMessage.content = afterThink.trim();
+            } else {
+              thinkingMessage.content = thinkBuffer.toString().trim();
+            }
+          } else if (inThinkBlock) {
+            if (fullText.contains('</think>')) {
+              inThinkBlock = false;
+              final thinkContent = fullText.substring(
+                fullText.indexOf('<think>') + '<think>'.length,
+                fullText.indexOf('</think>'),
+              );
+              thinkingMessage.content = thinkContent.trim();
+
+              final afterThink = fullText.substring(
+                fullText.indexOf('</think>') + '</think>'.length,
+              );
+              assistantMessage.content = afterThink.trim();
+            } else {
+              final afterTag = fullText.substring(
+                fullText.indexOf('<think>') + '<think>'.length,
+              );
+              thinkingMessage.content = afterTag.trim();
+            }
+          } else {
+            // No think tags — all content goes to assistant
+            assistantMessage.content = fullText
+                .replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '')
+                .trim();
+          }
+        } else {
+          assistantMessage.content = buffer.toString();
+        }
 
         final now = DateTime.now().millisecondsSinceEpoch;
         if (now - lastNotifyTime >= throttleMs) {
@@ -224,8 +327,14 @@ class ChatViewModel extends ChangeNotifier {
         }
       }
 
-      // Flush final state immediately
       notifyListeners();
+
+      // Persist thinking message if it has content
+      if (thinkingMessage != null && thinkingMessage.content.trim().isNotEmpty) {
+        await _conversationRepository.addMessage(thinkingMessage);
+      } else if (thinkingMessage != null) {
+        _messages.remove(thinkingMessage);
+      }
 
       if (assistantMessage.content.trim().isNotEmpty) {
         await _conversationRepository.addMessage(assistantMessage);

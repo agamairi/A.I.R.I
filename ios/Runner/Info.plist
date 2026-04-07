@@ -51,6 +51,8 @@
 	<string>A.I.R.I uses the microphone for voice conversations</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>A.I.R.I uses speech recognition for voice input</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>A.I.R.I needs access to your photo library to attach images to chat messages</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>A.I.R.I can serve the AI model to other devices on your local network</string>
 </dict>
