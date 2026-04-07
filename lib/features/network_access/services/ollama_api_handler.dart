@@ -59,6 +59,10 @@ class OllamaApiHandler {
     r.post('/api/generate', _generateHandler);
     r.post('/api/chat', _chatHandler);
 
+    // Model management (custom — lets the web UI load/unload models)
+    r.post('/api/load', _loadHandler);
+    r.post('/api/unload', _unloadHandler);
+
     // Custom health endpoint
     r.get('/api/health', _healthHandler);
 
@@ -200,6 +204,77 @@ class OllamaApiHandler {
       'uptime_seconds': uptime.inSeconds,
       'connected_clients': _recentClients.length,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // POST /api/load
+  // ---------------------------------------------------------------------------
+
+  Future<Response> _loadHandler(Request request) async {
+    _trackClient(request);
+    if (_inferenceInFlight) {
+      return _errorResponse(429, 'Model is busy processing a request. Try again shortly.');
+    }
+
+    final rawBody = await request.readAsString();
+    final body = jsonDecode(rawBody) as Map<String, dynamic>;
+    final modelName = (body['model'] as String?)?.trim() ?? '';
+    if (modelName.isEmpty) return _errorResponse(400, 'Missing model field');
+
+    final models = await _listModels();
+    final found = _nameResolver.findByName(models, modelName);
+    if (found == null) return _errorResponse(404, 'model "$modelName" not found');
+
+    // Already loaded?
+    if (_runtime.isLoaded && _runtime.currentModelPath == found.filePath) {
+      return _jsonResponse({
+        'status': 'ok',
+        'message': 'Model already loaded',
+        'model': modelName,
+      });
+    }
+
+    // Extract optional parameters
+    final nCtx = (body['n_ctx'] as int?) ?? 2048;
+    final nBatch = (body['n_batch'] as int?) ?? 512;
+    final nPredict = (body['n_predict'] as int?) ?? 512;
+
+    try {
+      await _runtime.loadModel(
+        found.filePath,
+        nCtx: nCtx,
+        nBatch: nBatch,
+        nPredict: nPredict,
+      );
+      return _jsonResponse({
+        'status': 'ok',
+        'message': 'Model loaded successfully',
+        'model': modelName,
+      });
+    } catch (e) {
+      return _errorResponse(500, 'Failed to load model: $e');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // POST /api/unload
+  // ---------------------------------------------------------------------------
+
+  Future<Response> _unloadHandler(Request request) async {
+    _trackClient(request);
+    if (_inferenceInFlight) {
+      return _errorResponse(429, 'Model is busy processing a request. Try again shortly.');
+    }
+
+    try {
+      await _runtime.dispose();
+      return _jsonResponse({
+        'status': 'ok',
+        'message': 'Model unloaded',
+      });
+    } catch (e) {
+      return _errorResponse(500, 'Failed to unload model: $e');
+    }
   }
 
   // ---------------------------------------------------------------------------

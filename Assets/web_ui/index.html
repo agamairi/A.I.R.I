@@ -101,6 +101,11 @@
 
   .btn:hover { background: var(--border); color: var(--text-primary); }
   .btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .btn.loading { opacity: 0.6; cursor: wait; }
+  .btn.load-btn { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .btn.unload-btn { background: transparent; border-color: var(--danger); color: var(--danger); }
+  .btn.load-btn:hover { background: var(--accent); color: #000; }
+  .btn.unload-btn:hover { background: var(--danger); color: #000; }
 
   /* Chat container */
   #chat-container {
@@ -361,6 +366,7 @@
   <span class="logo">A.I.R.I</span>
   <div class="status-dot" id="status-dot" title="Disconnected"></div>
   <select id="model-select"><option value="">Loading models...</option></select>
+  <button class="btn load-btn" id="load-btn" title="Load selected model" disabled>Load</button>
   <div class="header-spacer"></div>
   <button class="btn" id="system-btn" title="Toggle system prompt">System</button>
   <button class="btn" id="clear-btn" title="Clear conversation">Clear</button>
@@ -394,7 +400,9 @@
   // State
   let messages = [];
   let selectedModel = '';
+  let loadedModel = '';
   let isGenerating = false;
+  let isLoadingModel = false;
   let abortController = null;
 
   // Elements
@@ -403,6 +411,7 @@
   const input = document.getElementById('message-input');
   const sendBtn = document.getElementById('send-btn');
   const modelSelect = document.getElementById('model-select');
+  const loadBtn = document.getElementById('load-btn');
   const statusDot = document.getElementById('status-dot');
   const clearBtn = document.getElementById('clear-btn');
   const systemBtn = document.getElementById('system-btn');
@@ -433,11 +442,57 @@
     speedIndicator.textContent = '';
   });
 
+  // Update load button state based on selected vs loaded model
+  function updateLoadButton() {
+    if (!selectedModel) {
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'Load';
+      loadBtn.className = 'btn load-btn';
+      sendBtn.disabled = true;
+      return;
+    }
+    if (isLoadingModel) {
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'Loading…';
+      loadBtn.className = 'btn load-btn loading';
+      sendBtn.disabled = true;
+      return;
+    }
+    if (selectedModel === loadedModel) {
+      loadBtn.textContent = 'Unload';
+      loadBtn.className = 'btn unload-btn';
+      loadBtn.disabled = false;
+      sendBtn.disabled = false;
+    } else {
+      loadBtn.textContent = 'Load';
+      loadBtn.className = 'btn load-btn';
+      loadBtn.disabled = false;
+      sendBtn.disabled = true;
+    }
+  }
+
+  // Fetch loaded model status
+  async function fetchLoadedModel() {
+    try {
+      const res = await fetch('/api/ps');
+      const data = await res.json();
+      if (data.models && data.models.length > 0) {
+        loadedModel = data.models[0].name || '';
+      } else {
+        loadedModel = '';
+      }
+    } catch (_) {
+      loadedModel = '';
+    }
+    updateLoadButton();
+  }
+
   // Fetch models
   async function fetchModels() {
     try {
       const res = await fetch('/api/tags');
       const data = await res.json();
+      const prevSelected = selectedModel;
       modelSelect.innerHTML = '';
       if (data.models && data.models.length > 0) {
         data.models.forEach(m => {
@@ -446,24 +501,79 @@
           opt.textContent = m.name;
           modelSelect.appendChild(opt);
         });
-        selectedModel = data.models[0].name;
+        // Preserve previous selection if still available
+        if (prevSelected && data.models.some(m => m.name === prevSelected)) {
+          modelSelect.value = prevSelected;
+          selectedModel = prevSelected;
+        } else {
+          selectedModel = data.models[0].name;
+        }
         statusDot.classList.add('connected');
         statusDot.title = 'Connected';
-        sendBtn.disabled = false;
       } else {
         modelSelect.innerHTML = '<option value="">No models found</option>';
+        selectedModel = '';
         statusDot.classList.remove('connected');
         statusDot.title = 'No models available';
       }
     } catch (e) {
       modelSelect.innerHTML = '<option value="">Connection failed</option>';
+      selectedModel = '';
       statusDot.classList.remove('connected');
       statusDot.title = 'Connection failed';
     }
+    await fetchLoadedModel();
   }
 
   modelSelect.addEventListener('change', () => {
     selectedModel = modelSelect.value;
+    updateLoadButton();
+  });
+
+  // Load or unload model
+  loadBtn.addEventListener('click', async () => {
+    if (!selectedModel || isLoadingModel) return;
+
+    if (selectedModel === loadedModel) {
+      // Unload
+      isLoadingModel = true;
+      updateLoadButton();
+      try {
+        const res = await fetch('/api/unload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (res.ok) {
+          loadedModel = '';
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert('Unload failed: ' + (err.error || res.statusText));
+        }
+      } catch (e) {
+        alert('Unload failed: ' + e.message);
+      }
+      isLoadingModel = false;
+      updateLoadButton();
+      return;
+    }
+
+    // Load
+    isLoadingModel = true;
+    updateLoadButton();
+    try {
+      const res = await fetch('/api/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        loadedModel = selectedModel;
+      } else {
+        alert('Load failed: ' + (data.error || res.statusText));
+      }
+    } catch (e) {
+      alert('Load failed: ' + e.message);
+    }
+    isLoadingModel = false;
+    updateLoadButton();
   });
 
   // Markdown renderer (lightweight)
@@ -616,46 +726,63 @@
         signal: abortController.signal,
       });
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+      // Handle HTTP errors before trying to stream
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData.error || `Server error (${res.status})`;
+        if (res.status === 503) {
+          fullResponse = '[Model not loaded — use the Load button to load a model first]';
+        } else if (res.status === 429) {
+          fullResponse = '[Model is busy — wait for current request to finish]';
+        } else {
+          fullResponse = '[Error: ' + errMsg + ']';
+        }
+      } else {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const obj = JSON.parse(line);
-            if (obj.message && obj.message.content) {
-              fullResponse += obj.message.content;
-              tokenCount++;
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const obj = JSON.parse(line);
+              if (obj.error) {
+                fullResponse += '\n\n[Error: ' + obj.error + ']';
+                break;
+              }
+              if (obj.message && obj.message.content) {
+                fullResponse += obj.message.content;
+                tokenCount++;
 
-              // Update display every few tokens for performance
-              if (tokenCount % 3 === 0 || obj.done) {
-                contentDiv.innerHTML = renderMarkdown(fullResponse);
-                if (!obj.done) {
-                  const cursor = document.createElement('span');
-                  cursor.className = 'cursor';
-                  contentDiv.appendChild(cursor);
+                // Update display every few tokens for performance
+                if (tokenCount % 3 === 0 || obj.done) {
+                  contentDiv.innerHTML = renderMarkdown(fullResponse);
+                  if (!obj.done) {
+                    const cursor = document.createElement('span');
+                    cursor.className = 'cursor';
+                    contentDiv.appendChild(cursor);
+                  }
+                  scrollToBottom();
                 }
-                scrollToBottom();
-              }
 
-              // Update speed
-              const elapsed = (performance.now() - startTime) / 1000;
-              if (elapsed > 0.5) {
-                const tps = (tokenCount / elapsed).toFixed(1);
-                speedIndicator.textContent = `${tps} tokens/s | ${tokenCount} tokens`;
+                // Update speed
+                const elapsed = (performance.now() - startTime) / 1000;
+                if (elapsed > 0.5) {
+                  const tps = (tokenCount / elapsed).toFixed(1);
+                  speedIndicator.textContent = `${tps} tokens/s | ${tokenCount} tokens`;
+                }
               }
-            }
-            if (obj.done) break;
-          } catch (_) {}
+              if (obj.done) break;
+            } catch (_) {}
+          }
         }
       }
     } catch (e) {
@@ -677,7 +804,7 @@
     isGenerating = false;
     abortController = null;
     sendBtn.textContent = 'Send';
-    sendBtn.disabled = false;
+    updateLoadButton();
     input.focus();
   }
 
