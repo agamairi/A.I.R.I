@@ -163,6 +163,13 @@ class VisionViewModel extends ChangeNotifier {
           'Load a vision model (e.g. LLaVA) to enable camera analysis. '
           'Text chat still works.';
       _cameraEnabled = false;
+    } else if (_runtimeService.capability.supportsVision &&
+        !_runtimeService.visionProjectorLoaded) {
+      _visionWarning =
+          'Vision model loaded but mmproj projector file is missing. '
+          'Download the matching *-mmproj-*.gguf file and place it in '
+          'the same folder as the model. Falling back to text-only.';
+      _cameraEnabled = false;
     } else {
       _visionWarning = null;
     }
