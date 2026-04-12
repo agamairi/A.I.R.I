@@ -16,6 +16,7 @@ import 'package:local_ai_chat/features/network_access/services/ollama_api_handle
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:uuid/uuid.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 class LanServerService {
   final ModelRuntimeService _runtime;
@@ -27,6 +28,7 @@ class LanServerService {
   bool _isRunning = false;
   bool _requireAuth = false;
   bool _showWebUI = true;
+  bool _keepScreenOn = false;
   String? _cachedWebUI;
 
   bool get isRunning => _isRunning;
@@ -57,6 +59,7 @@ class LanServerService {
     String? token,
     bool requireAuth = false,
     bool showWebUI = true,
+    bool keepScreenOn = false,
   }) async {
     if (port < 1 || port > 65535) {
       throw ArgumentError.value(
@@ -66,6 +69,7 @@ class LanServerService {
 
     _requireAuth = requireAuth;
     _showWebUI = showWebUI;
+    _keepScreenOn = keepScreenOn;
 
     final resolvedToken = token?.trim();
     if (resolvedToken != null && resolvedToken.isNotEmpty) {
@@ -93,6 +97,9 @@ class LanServerService {
         port,
       );
       _isRunning = true;
+      if (_keepScreenOn) {
+        WakelockPlus.enable();
+      }
       print('Ollama-compatible server running on 0.0.0.0:$port');
     } catch (_) {
       _server = null;
@@ -108,6 +115,7 @@ class LanServerService {
     } finally {
       _server = null;
       _isRunning = false;
+      WakelockPlus.disable();
     }
   }
 

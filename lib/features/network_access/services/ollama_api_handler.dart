@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:llamadart/llamadart.dart';
@@ -29,6 +30,13 @@ class OllamaApiHandler {
   /// Tracks whether a generation is currently in-flight (serialised inference).
   bool _inferenceInFlight = false;
 
+  /// Queue of waiters for the inference lock. When inference finishes, the
+  /// next waiter in line is completed so it can proceed.
+  final Queue<Completer<void>> _inferenceQueue = Queue<Completer<void>>();
+
+  /// Whether an external client request is currently generating tokens.
+  bool get inferenceInFlight => _inferenceInFlight;
+
   /// Tracks server start time for uptime reporting.
   final DateTime _startedAt = DateTime.now();
 
@@ -39,6 +47,50 @@ class OllamaApiHandler {
   Set<String> get recentClients => Set.unmodifiable(_recentClients);
 
   OllamaApiHandler(this._runtime, this._nameResolver);
+
+  // ---------------------------------------------------------------------------
+  // Inference lock helpers
+  // ---------------------------------------------------------------------------
+
+  /// Acquire the inference lock.  If the lock is free, returns immediately.
+  /// If another generation is in-flight, waits up to [timeout] for it to
+  /// finish.  Returns `true` if the lock was acquired, `false` on timeout.
+  Future<bool> _acquireInference({
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    if (!_inferenceInFlight) {
+      _inferenceInFlight = true;
+      return true;
+    }
+
+    // Already busy — enqueue ourselves and wait.
+    final completer = Completer<void>();
+    _inferenceQueue.add(completer);
+
+    try {
+      await completer.future.timeout(timeout);
+      // When we're completed, _releaseInference already set us as the owner.
+      return true;
+    } on TimeoutException {
+      // Remove ourselves from the queue if we timed out.
+      _inferenceQueue.remove(completer);
+      return false;
+    }
+  }
+
+  /// Release the inference lock and hand it to the next waiter, if any.
+  void _releaseInference() {
+    if (_inferenceQueue.isNotEmpty) {
+      // Hand the lock directly to the next waiter — keep _inferenceInFlight
+      // true so no one else can sneak in.
+      final next = _inferenceQueue.removeFirst();
+      // Complete on the next microtask so the caller's finally block finishes
+      // before the next request starts generating.
+      scheduleMicrotask(() => next.complete());
+    } else {
+      _inferenceInFlight = false;
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Router
@@ -132,6 +184,16 @@ class OllamaApiHandler {
 
   Response _errorResponse(int statusCode, String message) {
     return _jsonResponse({'error': message}, statusCode: statusCode);
+  }
+
+  /// Logs detailed request info for debugging ghost/unexpected requests.
+  void _logRequestDetails(Request request, String endpoint) {
+    final ip = request.headers['x-forwarded-for'] ??
+        request.headers['x-real-ip'] ??
+        '(direct)';
+    final ua = request.headers['user-agent'] ?? '(no user-agent)';
+    final cl = request.headers['content-length'] ?? '?';
+    print('[$endpoint] client=$ip  ua=$ua  content-length=$cl');
   }
 
   // ---------------------------------------------------------------------------
@@ -315,35 +377,48 @@ class OllamaApiHandler {
 
   Future<Response> _generateHandler(Request request) async {
     _trackClient(request);
+    _logRequestDetails(request, '/api/generate');
     if (!_runtime.isLoaded) {
       return _errorResponse(503, 'No model loaded. Load a model in the A.I.R.I app first.');
     }
-    if (_inferenceInFlight) {
-      return _errorResponse(429, 'Model is busy processing another request. Try again shortly.');
+
+    // Wait for the inference lock (queues behind any in-flight generation).
+    final acquired = await _acquireInference();
+    if (!acquired) {
+      return _errorResponse(429, 'Model is busy and the request timed out. Try again shortly.');
     }
 
-    final rawBody = await request.readAsString();
-    if (rawBody.length > 512 * 1024) return _errorResponse(413, 'Request body too large');
+    try {
+      final rawBody = await request.readAsString();
+      if (rawBody.length > 512 * 1024) {
+        _releaseInference();
+        return _errorResponse(413, 'Request body too large');
+      }
 
-    final body = jsonDecode(rawBody) as Map<String, dynamic>;
-    final prompt = (body['prompt'] as String?)?.trim();
-    final system = (body['system'] as String?)?.trim();
-    final stream = body['stream'] as bool? ?? true;
-    final options = body['options'] as Map<String, dynamic>?;
+      final body = jsonDecode(rawBody) as Map<String, dynamic>;
+      final prompt = (body['prompt'] as String?)?.trim();
+      final system = (body['system'] as String?)?.trim();
+      final stream = body['stream'] as bool? ?? true;
+      final options = body['options'] as Map<String, dynamic>?;
 
-    if (prompt == null || prompt.isEmpty) {
-      return _errorResponse(400, 'Missing prompt field');
+      if (prompt == null || prompt.isEmpty) {
+        _releaseInference();
+        return _errorResponse(400, 'Missing prompt field');
+      }
+
+      final formattedPrompt = formatRawPrompt(prompt, system: system);
+      final params = _paramsFromOptions(options);
+      final modelName = _currentModelOllamaName();
+
+      if (!stream) {
+        return _generateNonStreaming(formattedPrompt, params, modelName);
+      }
+
+      return _generateStreaming(formattedPrompt, params, modelName);
+    } catch (e) {
+      _releaseInference();
+      return _errorResponse(500, 'Internal error: $e');
     }
-
-    final formattedPrompt = formatRawPrompt(prompt, system: system);
-    final params = _paramsFromOptions(options);
-    final modelName = _currentModelOllamaName();
-
-    if (!stream) {
-      return _generateNonStreaming(formattedPrompt, params, modelName);
-    }
-
-    return _generateStreaming(formattedPrompt, params, modelName);
   }
 
   Future<Response> _generateNonStreaming(
@@ -351,7 +426,7 @@ class OllamaApiHandler {
     GenerationParams params,
     String modelName,
   ) async {
-    _inferenceInFlight = true;
+    // _inferenceInFlight already set by _generateHandler
     final stopwatch = Stopwatch()..start();
     final buffer = StringBuffer();
     int tokenCount = 0;
@@ -377,7 +452,7 @@ class OllamaApiHandler {
     } catch (e) {
       return _errorResponse(500, e.toString());
     } finally {
-      _inferenceInFlight = false;
+      _releaseInference();
     }
   }
 
@@ -386,14 +461,20 @@ class OllamaApiHandler {
     GenerationParams params,
     String modelName,
   ) {
-    _inferenceInFlight = true;
+    // _inferenceInFlight already set by _generateHandler
     final stopwatch = Stopwatch()..start();
     int tokenCount = 0;
 
     final streamController = StreamController<List<int>>();
 
+    /// Safe emit — silently drops writes if the stream is already closed.
     void emitJson(Map<String, dynamic> obj) {
-      streamController.add(utf8.encode('${jsonEncode(obj)}\n'));
+      if (streamController.isClosed) return;
+      try {
+        streamController.add(utf8.encode('${jsonEncode(obj)}\n'));
+      } catch (_) {
+        // Client disconnected — ignore.
+      }
     }
 
     () async {
@@ -428,18 +509,18 @@ class OllamaApiHandler {
           'eval_count': tokenCount,
           'eval_duration': stopwatch.elapsedMicroseconds * 1000,
         });
-        _inferenceInFlight = false;
-        await streamController.close();
+        // Always release the lock before closing the stream.
+        _releaseInference();
+        try {
+          await streamController.close();
+        } catch (_) {}
       }
     }();
 
     return Response.ok(
       streamController.stream,
-      headers: {
-        'content-type': 'application/x-ndjson',
-        'cache-control': 'no-cache',
-        'transfer-encoding': 'chunked',
-      },
+      headers: {'content-type': 'application/x-ndjson'},
+      context: {'shelf.io.buffer_output': false},
     );
   }
 
@@ -449,36 +530,49 @@ class OllamaApiHandler {
 
   Future<Response> _chatHandler(Request request) async {
     _trackClient(request);
+    _logRequestDetails(request, '/api/chat');
     if (!_runtime.isLoaded) {
       return _errorResponse(503, 'No model loaded. Load a model in the A.I.R.I app first.');
     }
-    if (_inferenceInFlight) {
-      return _errorResponse(429, 'Model is busy processing another request. Try again shortly.');
+
+    // Wait for the inference lock (queues behind any in-flight generation).
+    final acquired = await _acquireInference();
+    if (!acquired) {
+      return _errorResponse(429, 'Model is busy and the request timed out. Try again shortly.');
     }
 
-    final rawBody = await request.readAsString();
-    if (rawBody.length > 512 * 1024) return _errorResponse(413, 'Request body too large');
+    try {
+      final rawBody = await request.readAsString();
+      if (rawBody.length > 512 * 1024) {
+        _releaseInference();
+        return _errorResponse(413, 'Request body too large');
+      }
 
-    final body = jsonDecode(rawBody) as Map<String, dynamic>;
-    final messages = (body['messages'] as List<dynamic>?)
-        ?.map((m) => Map<String, dynamic>.from(m as Map))
-        .toList();
-    final stream = body['stream'] as bool? ?? true;
-    final options = body['options'] as Map<String, dynamic>?;
+      final body = jsonDecode(rawBody) as Map<String, dynamic>;
+      final messages = (body['messages'] as List<dynamic>?)
+          ?.map((m) => Map<String, dynamic>.from(m as Map))
+          .toList();
+      final stream = body['stream'] as bool? ?? true;
+      final options = body['options'] as Map<String, dynamic>?;
 
-    if (messages == null || messages.isEmpty) {
-      return _errorResponse(400, 'Missing or empty messages array');
+      if (messages == null || messages.isEmpty) {
+        _releaseInference();
+        return _errorResponse(400, 'Missing or empty messages array');
+      }
+
+      final formattedPrompt = formatChatMessages(messages);
+      final params = _paramsFromOptions(options);
+      final modelName = _currentModelOllamaName();
+
+      if (!stream) {
+        return _chatNonStreaming(formattedPrompt, params, modelName);
+      }
+
+      return _chatStreaming(formattedPrompt, params, modelName);
+    } catch (e) {
+      _releaseInference();
+      return _errorResponse(500, 'Internal error: $e');
     }
-
-    final formattedPrompt = formatChatMessages(messages);
-    final params = _paramsFromOptions(options);
-    final modelName = _currentModelOllamaName();
-
-    if (!stream) {
-      return _chatNonStreaming(formattedPrompt, params, modelName);
-    }
-
-    return _chatStreaming(formattedPrompt, params, modelName);
   }
 
   Future<Response> _chatNonStreaming(
@@ -486,7 +580,7 @@ class OllamaApiHandler {
     GenerationParams params,
     String modelName,
   ) async {
-    _inferenceInFlight = true;
+    // _inferenceInFlight already set by _chatHandler
     final stopwatch = Stopwatch()..start();
     final buffer = StringBuffer();
     int tokenCount = 0;
@@ -515,7 +609,7 @@ class OllamaApiHandler {
     } catch (e) {
       return _errorResponse(500, e.toString());
     } finally {
-      _inferenceInFlight = false;
+      _releaseInference();
     }
   }
 
@@ -524,14 +618,20 @@ class OllamaApiHandler {
     GenerationParams params,
     String modelName,
   ) {
-    _inferenceInFlight = true;
+    // _inferenceInFlight already set by _chatHandler
     final stopwatch = Stopwatch()..start();
     int tokenCount = 0;
 
     final streamController = StreamController<List<int>>();
 
+    /// Safe emit — silently drops writes if the stream is already closed.
     void emitJson(Map<String, dynamic> obj) {
-      streamController.add(utf8.encode('${jsonEncode(obj)}\n'));
+      if (streamController.isClosed) return;
+      try {
+        streamController.add(utf8.encode('${jsonEncode(obj)}\n'));
+      } catch (_) {
+        // Client disconnected — ignore.
+      }
     }
 
     () async {
@@ -547,7 +647,6 @@ class OllamaApiHandler {
           });
         }
       } catch (e) {
-        // Emit error in final chunk
         emitJson({
           'model': modelName,
           'created_at': DateTime.now().toUtc().toIso8601String(),
@@ -567,18 +666,18 @@ class OllamaApiHandler {
           'eval_count': tokenCount,
           'eval_duration': stopwatch.elapsedMicroseconds * 1000,
         });
-        _inferenceInFlight = false;
-        await streamController.close();
+        // Always release the lock before closing the stream.
+        _releaseInference();
+        try {
+          await streamController.close();
+        } catch (_) {}
       }
     }();
 
     return Response.ok(
       streamController.stream,
-      headers: {
-        'content-type': 'application/x-ndjson',
-        'cache-control': 'no-cache',
-        'transfer-encoding': 'chunked',
-      },
+      headers: {'content-type': 'application/x-ndjson'},
+      context: {'shelf.io.buffer_output': false},
     );
   }
 
@@ -601,41 +700,54 @@ class OllamaApiHandler {
 
   Future<Response> _openaiChatCompletionsHandler(Request request) async {
     _trackClient(request);
+    _logRequestDetails(request, '/v1/chat/completions');
     if (!_runtime.isLoaded) {
       return _errorResponse(503, 'No model loaded. Load a model in the A.I.R.I app first.');
     }
-    if (_inferenceInFlight) {
-      return _errorResponse(429, 'Model is busy processing another request. Try again shortly.');
+
+    // Wait for the inference lock (queues behind any in-flight generation).
+    final acquired = await _acquireInference();
+    if (!acquired) {
+      return _errorResponse(429, 'Model is busy and the request timed out. Try again shortly.');
     }
 
-    final rawBody = await request.readAsString();
-    if (rawBody.length > 512 * 1024) return _errorResponse(413, 'Request body too large');
+    try {
+      final rawBody = await request.readAsString();
+      if (rawBody.length > 512 * 1024) {
+        _releaseInference();
+        return _errorResponse(413, 'Request body too large');
+      }
 
-    final body = jsonDecode(rawBody) as Map<String, dynamic>;
-    final messages = (body['messages'] as List<dynamic>?)
-        ?.map((m) => Map<String, dynamic>.from(m as Map))
-        .toList();
-    final stream = body['stream'] as bool? ?? false;
+      final body = jsonDecode(rawBody) as Map<String, dynamic>;
+      final messages = (body['messages'] as List<dynamic>?)
+          ?.map((m) => Map<String, dynamic>.from(m as Map))
+          .toList();
+      final stream = body['stream'] as bool? ?? false;
 
-    if (messages == null || messages.isEmpty) {
-      return _errorResponse(400, 'Missing or empty messages array');
-    }
+      if (messages == null || messages.isEmpty) {
+        _releaseInference();
+        return _errorResponse(400, 'Missing or empty messages array');
+      }
 
-    final formattedPrompt = formatChatMessages(messages);
-    final params = _paramsFromOpenAI(body);
-    final modelName = _currentModelOllamaName();
-    final requestId = 'chatcmpl-${const Uuid().v4().substring(0, 12)}';
-    final created = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final formattedPrompt = formatChatMessages(messages);
+      final params = _paramsFromOpenAI(body);
+      final modelName = _currentModelOllamaName();
+      final requestId = 'chatcmpl-${const Uuid().v4().substring(0, 12)}';
+      final created = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-    if (!stream) {
-      return _openaiChatNonStreaming(
+      if (!stream) {
+        return _openaiChatNonStreaming(
+          formattedPrompt, params, modelName, requestId, created,
+        );
+      }
+
+      return _openaiChatStreaming(
         formattedPrompt, params, modelName, requestId, created,
       );
+    } catch (e) {
+      _releaseInference();
+      return _errorResponse(500, 'Internal error: $e');
     }
-
-    return _openaiChatStreaming(
-      formattedPrompt, params, modelName, requestId, created,
-    );
   }
 
   Future<Response> _openaiChatNonStreaming(
@@ -645,7 +757,7 @@ class OllamaApiHandler {
     String requestId,
     int created,
   ) async {
-    _inferenceInFlight = true;
+    // _inferenceInFlight already set by _openaiChatCompletionsHandler
     final buffer = StringBuffer();
     int tokenCount = 0;
 
@@ -680,7 +792,7 @@ class OllamaApiHandler {
     } catch (e) {
       return _errorResponse(500, e.toString());
     } finally {
-      _inferenceInFlight = false;
+      _releaseInference();
     }
   }
 
@@ -691,13 +803,19 @@ class OllamaApiHandler {
     String requestId,
     int created,
   ) {
-    _inferenceInFlight = true;
+    // _inferenceInFlight already set by _openaiChatCompletionsHandler
     bool isFirst = true;
 
     final streamController = StreamController<List<int>>();
 
+    /// Safe emit — silently drops writes if the stream is already closed.
     void emitSSE(Map<String, dynamic> obj) {
-      streamController.add(utf8.encode('data: ${jsonEncode(obj)}\n\n'));
+      if (streamController.isClosed) return;
+      try {
+        streamController.add(utf8.encode('data: ${jsonEncode(obj)}\n\n'));
+      } catch (_) {
+        // Client disconnected — ignore.
+      }
     }
 
     () async {
@@ -741,10 +859,16 @@ class OllamaApiHandler {
             }
           ],
         });
-
-        streamController.add(utf8.encode('data: [DONE]\n\n'));
-        _inferenceInFlight = false;
-        await streamController.close();
+        if (!streamController.isClosed) {
+          try {
+            streamController.add(utf8.encode('data: [DONE]\n\n'));
+          } catch (_) {}
+        }
+        // Always release the lock before closing the stream.
+        _releaseInference();
+        try {
+          await streamController.close();
+        } catch (_) {}
       }
     }();
 
@@ -753,8 +877,8 @@ class OllamaApiHandler {
       headers: {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
-        'connection': 'keep-alive',
       },
+      context: {'shelf.io.buffer_output': false},
     );
   }
 }

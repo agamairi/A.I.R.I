@@ -715,16 +715,32 @@
     abortController = new AbortController();
 
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: reqMessages,
-          stream: true
-        }),
-        signal: abortController.signal,
-      });
+      // Retry loop for 429 (model busy) — back off and retry up to 6 times
+      const maxRetries = 6;
+      let res;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: selectedModel,
+            messages: reqMessages,
+            stream: true
+          }),
+          signal: abortController.signal,
+        });
+
+        if (res.status !== 429 || attempt === maxRetries) break;
+
+        // Show waiting status and back off: 1s, 2s, 4s, 8s, 16s, 32s
+        const delay = Math.min(1000 * Math.pow(2, attempt), 32000);
+        contentDiv.innerHTML = `<span style="color:var(--text-muted)">Model busy — retrying in ${(delay/1000).toFixed(0)}s… (${attempt + 1}/${maxRetries})</span>`;
+        scrollToBottom();
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, delay);
+          abortController.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+        });
+      }
 
       // Handle HTTP errors before trying to stream
       if (!res.ok) {
@@ -733,7 +749,7 @@
         if (res.status === 503) {
           fullResponse = '[Model not loaded — use the Load button to load a model first]';
         } else if (res.status === 429) {
-          fullResponse = '[Model is busy — wait for current request to finish]';
+          fullResponse = '[Model is busy — still processing after retries. Try again shortly.]';
         } else {
           fullResponse = '[Error: ' + errMsg + ']';
         }

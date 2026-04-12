@@ -3,12 +3,14 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:local_ai_chat/core/models/download_task.dart';
 import 'package:local_ai_chat/features/models/services/model_catalog_service.dart';
 import 'package:local_ai_chat/features/models/services/model_download_service.dart';
 import 'package:local_ai_chat/features/models/services/model_runtime_service.dart';
 import 'package:local_ai_chat/features/settings/repositories/settings_repository.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 class ModelManagerViewModel extends ChangeNotifier {
@@ -49,6 +51,10 @@ class ModelManagerViewModel extends ChangeNotifier {
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
 
+  /// External model paths imported via file picker.
+  List<String> _externalModelPaths = <String>[];
+  List<String> get externalModelPaths => List.unmodifiable(_externalModelPaths);
+
   bool get isModelLoaded => _runtimeService.isLoaded;
   String? get loadedModelPath => _runtimeService.currentModelPath;
 
@@ -61,6 +67,7 @@ class ModelManagerViewModel extends ChangeNotifier {
       notifyListeners();
     });
 
+    await _loadExternalPaths();
     await Future.wait(<Future<void>>[
       refreshLocalModels(),
       loadCatalog(),
@@ -72,7 +79,17 @@ class ModelManagerViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _localModels = await _runtimeService.listLocalModels();
+      final appModels = await _runtimeService.listLocalModels();
+      // Merge external paths (only those that still exist on disk)
+      final validExternal = <String>[];
+      for (final path in _externalModelPaths) {
+        if (File(path).existsSync()) {
+          validExternal.add(path);
+        }
+      }
+      // Deduplicate
+      final allPaths = <String>{...appModels, ...validExternal};
+      _localModels = allPaths.toList();
     } catch (e) {
       _errorMessage = 'Failed to load local models: $e';
     } finally {
@@ -194,6 +211,54 @@ class ModelManagerViewModel extends ChangeNotifier {
       ),
     );
     return task.id.isEmpty ? null : task.progress;
+  }
+
+  /// Offloads (unloads) currently loaded model from memory.
+  Future<void> offloadModel() async {
+    await _runtimeService.dispose();
+    notifyListeners();
+  }
+
+  /// Opens file picker, imports selected .gguf model, saves path persistently.
+  Future<void> importModelFromFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    final path = result.files.single.path;
+    if (path == null || !path.endsWith('.gguf')) {
+      _errorMessage = 'Only .gguf model files supported.';
+      notifyListeners();
+      return;
+    }
+
+    if (!_externalModelPaths.contains(path)) {
+      _externalModelPaths.add(path);
+      await _saveExternalPaths();
+    }
+    await refreshLocalModels();
+  }
+
+  /// Removes saved external model path (does not delete file).
+  Future<void> removeExternalPath(String path) async {
+    _externalModelPaths.remove(path);
+    await _saveExternalPaths();
+    await refreshLocalModels();
+  }
+
+  static const _externalPathsKey = 'external_model_paths';
+
+  Future<void> _loadExternalPaths() async {
+    final prefs = await SharedPreferences.getInstance();
+    _externalModelPaths = prefs.getStringList(_externalPathsKey) ?? [];
+  }
+
+  Future<void> _saveExternalPaths() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_externalPathsKey, _externalModelPaths);
   }
 
   /// Called when the app resumes from background — checks for stalled

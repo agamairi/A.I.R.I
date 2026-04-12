@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:local_ai_chat/core/models/app_settings.dart';
+import 'package:llamadart/llamadart.dart' show GenerationParams;
 import 'package:local_ai_chat/features/models/services/model_runtime_service.dart';
 import 'package:local_ai_chat/features/settings/repositories/settings_repository.dart';
 import 'package:local_ai_chat/features/vision/services/frame_scheduler.dart';
@@ -397,8 +398,18 @@ class VisionViewModel extends ChangeNotifier {
           ? 'Hello.'
           : _spokenText.trim();
 
+      final genParams = GenerationParams(
+        maxTokens: _nPredict,
+        temp: _temperature,
+        topK: _topK,
+        topP: _topP,
+      );
+
       final buffer = StringBuffer();
-      final stream = _runtimeService.generateStream(prompt);
+      final stream = _runtimeService.generateStream(
+        prompt,
+        generationParams: genParams,
+      );
       var lastNotify = DateTime.now().millisecondsSinceEpoch;
 
       await for (final token in stream) {
@@ -461,10 +472,18 @@ class VisionViewModel extends ChangeNotifier {
           ? 'Describe what you see briefly.'
           : _spokenText.trim();
 
+      final genParams = GenerationParams(
+        maxTokens: _nPredict,
+        temp: _temperature,
+        topK: _topK,
+        topP: _topP,
+      );
+
       final buffer = StringBuffer();
       final stream = _runtimeService.generateVisionStream(
         prompt,
         images: [prepared],
+        generationParams: genParams,
       );
       var lastNotifyV = DateTime.now().millisecondsSinceEpoch;
 
