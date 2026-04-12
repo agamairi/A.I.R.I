@@ -68,6 +68,7 @@ dependencies:
   syncfusion_flutter_pdf: ^33.1.45
   crypto: ^3.0.3
   wakelock_plus: ^1.2.8
+  package_info_plus: ^8.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

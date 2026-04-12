@@ -66,10 +66,14 @@ class ModelSettings {
   /// Whether to enable thinking/reasoning mode during generation.
   bool enableThinking;
 
+  /// Defaults tuned for 6 GB RAM phones running ~3B Q4 models.
+  /// nCtx 1024 keeps memory low while still useful for chat.
+  /// nBatch 256 balances prompt eval speed vs memory.
+  /// nPredict 256 prevents runaway generation on small devices.
   ModelSettings({
-    this.nCtx = 2048,
-    this.nBatch = 512,
-    this.nPredict = 512,
+    this.nCtx = 1024,
+    this.nBatch = 256,
+    this.nPredict = 256,
     this.temperature = 0.7,
     this.topK = 40,
     this.topP = 0.9,

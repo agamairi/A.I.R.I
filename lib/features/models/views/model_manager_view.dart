@@ -56,11 +56,8 @@ class _ModelManagerViewState extends State<ModelManagerView>
 
         final browseModels = vm.availableModels;
 
-        // Default to Saved tab if local models exist, Browse otherwise.
-        final initialTab = vm.localModels.isNotEmpty ? 2 : 0;
-
         return DefaultTabController(
-          initialIndex: initialTab,
+          initialIndex: 2, // Always open Saved tab first
           length: 3,
           child: Scaffold(
             drawer: AppShellDrawer(selectedIndex: widget.drawerIndex),
@@ -388,45 +385,123 @@ class _SavedModelsTab extends StatelessWidget {
     }
 
     if (viewModel.localModels.isEmpty) {
-      return const Center(child: Text('No local GGUF models found yet.'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.folder_open, size: 64,
+                color: Theme.of(context).colorScheme.outline),
+            const SizedBox(height: 16),
+            const Text('No models found.'),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () {
+                // Switch to Browse tab (index 0)
+                DefaultTabController.of(context).animateTo(0);
+              },
+              icon: const Icon(Icons.download),
+              label: const Text('Download Models'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => viewModel.importModelFromFile(),
+              icon: const Icon(Icons.file_open),
+              label: const Text('Import from Files'),
+            ),
+          ],
+        ),
+      );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: viewModel.localModels.length,
-      itemBuilder: (context, index) {
-        final path = viewModel.localModels[index];
-        final file = File(path);
-        final name = file.uri.pathSegments.last;
-        final isCurrent = viewModel.loadedModelPath == path;
-        final sizeBytes = file.existsSync() ? file.lengthSync() : 0;
+    final isExternal = viewModel.externalModelPaths.toSet();
 
-        return Card(
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          child: ListTile(
-            title: Text(name),
-            subtitle: Text(
-              '${_humanReadableBytes(sizeBytes)}${isCurrent ? ' • Currently loaded' : ''}',
-            ),
-            trailing: Wrap(
-              spacing: 8,
-              children: [
-                FilledButton.tonal(
-                  onPressed: () => viewModel.loadModel(path),
-                  child: Text(isCurrent ? 'Reload' : 'Load'),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => viewModel.deleteLocalModel(path),
-                ),
-              ],
+    return Column(
+      children: [
+        // Import button at top
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => viewModel.importModelFromFile(),
+              icon: const Icon(Icons.file_open, size: 18),
+              label: const Text('Import Model from Files'),
             ),
           ),
-        );
-      },
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: viewModel.localModels.length,
+            itemBuilder: (context, index) {
+              final path = viewModel.localModels[index];
+              final file = File(path);
+              final name = file.uri.pathSegments.last;
+              final isCurrent = viewModel.loadedModelPath == path;
+              final sizeBytes = file.existsSync() ? file.lengthSync() : 0;
+              final isExt = isExternal.contains(path);
+
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name,
+                          style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${_humanReadableBytes(sizeBytes)}'
+                        '${isCurrent ? '  •  Currently loaded' : ''}'
+                        '${isExt ? '  •  External' : ''}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          if (isCurrent) ...[
+                            FilledButton.tonal(
+                              onPressed: () => viewModel.offloadModel(),
+                              child: const Text('Offload'),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton.tonal(
+                              onPressed: () => viewModel.loadModel(path),
+                              child: const Text('Reload'),
+                            ),
+                          ] else
+                            FilledButton.tonal(
+                              onPressed: () => viewModel.loadModel(path),
+                              child: const Text('Load'),
+                            ),
+                          const Spacer(),
+                          if (isExt)
+                            IconButton(
+                              icon: const Icon(Icons.link_off, size: 20),
+                              tooltip: 'Remove external link',
+                              onPressed: () =>
+                                  viewModel.removeExternalPath(path),
+                            ),
+                          if (!isExt)
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 20),
+                              onPressed: () =>
+                                  viewModel.deleteLocalModel(path),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
-
 }
 
 String _humanReadableBytes(int bytes) {

@@ -333,7 +333,12 @@ class ModelRuntimeService {
     final normalized = modelPath.toLowerCase();
     if (normalized.contains('llava') ||
         normalized.contains('vision') ||
-        normalized.contains('vlm')) {
+        normalized.contains('vlm') ||
+        normalized.contains('granite') ||
+        normalized.contains('minicpm') ||
+        normalized.contains('moondream') ||
+        normalized.contains('llama-3.2') ||
+        normalized.contains('nanollava')) {
       return ModelCapability.vision;
     }
     if (normalized.contains('embed')) {

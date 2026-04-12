@@ -69,6 +69,7 @@ class _NetworkAccessViewState extends State<NetworkAccessView> {
         token: lan.authToken,
         requireAuth: lan.requireAuth,
         showWebUI: lan.showWebUI,
+        keepScreenOn: lan.keepScreenOn,
       );
     } catch (e) {
       lan.enabled = false;
@@ -99,22 +100,40 @@ class _NetworkAccessViewState extends State<NetworkAccessView> {
     final isRunning = lanService.isRunning;
     final url = _serverUrl(lanService);
 
-    return Scaffold(
-      drawer: AppShellDrawer(selectedIndex: widget.drawerIndex),
-      appBar: AppBar(
-        title: const Text('Network Server'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh IP',
-            onPressed: () {
-              setState(() => _loadingIp = true);
-              _fetchIp();
-            },
-          ),
-        ],
-      ),
-      body: SafeArea(
+    final isInferenceLocked =
+        isRunning && lanService.ollamaHandler.inferenceInFlight;
+
+    return PopScope(
+      canPop: !isInferenceLocked,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Server is processing a client request. '
+                'Stop the server or wait for it to finish.',
+              ),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      },
+      child: Scaffold(
+        drawer: AppShellDrawer(selectedIndex: widget.drawerIndex),
+        appBar: AppBar(
+          title: const Text('Network Server'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Refresh IP',
+              onPressed: () {
+                setState(() => _loadingIp = true);
+                _fetchIp();
+              },
+            ),
+          ],
+        ),
+        body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -330,6 +349,7 @@ class _NetworkAccessViewState extends State<NetworkAccessView> {
           ],
         ),
       ),
+    ),
     );
   }
 }
